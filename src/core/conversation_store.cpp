@@ -60,7 +60,7 @@ enum FileKind : uint32_t { kConversationFile = 0, kBlockFile = 1, kStateFile = 2
 
 enum Kind : uint32_t {
     kIds = 1, kImgs = 2, kCheck = 3, kRefs = 4,
-    kGdn = 10, kPle = 11, kTails = 12, kDead = 13, kBlockPos = 14,
+    kGdn = 10, kPle = 11, kTails = 12, kDead = 13, kBlockPos = 14, kExtraState = 15,
     kKvHead = 20, kK = 21, kV = 22, kKs = 23, kVs = 24, kPooled = 25, kKvRate = 26,
 };
 
@@ -194,8 +194,8 @@ Section& add_kv(Srcs& v, uint32_t kind, uint32_t index, uint64_t n, const Conver
 }
 
 void add_state(Srcs& v, const ConversationCheckpoint& c, uint32_t index) {
-    const CheckpointBytes* f[5] = {&c.state_a, &c.state_b, &c.state_c, &c.state_d, &c.state_e};
-    for (int k = 0; k < 5; ++k) {
+    const CheckpointBytes* f[6] = {&c.state_a, &c.state_b, &c.state_c, &c.state_d, &c.state_e, &c.state_f};
+    for (int k = 0; k < 6; ++k) {
         const CheckpointBytes* b = f[k];
         add(v, kGdn + k, index, b->size(), [b](uint64_t o, uint8_t* d, uint64_t n) { std::memcpy(d, b->data() + o, n); },
             [b](uint64_t o, uint64_t) -> const uint8_t* { return b->data() + o; });
@@ -716,7 +716,7 @@ uint64_t ConversationStore::load_bytes(const Match& m) const {
     if (e.job) return e.job->image.bytes();   // an upper bound for a copy out of the queue
     uint64_t n = (uint64_t) m.tokens * 4 * 3, state = 0;
     for (const Section& s : e.table) {
-        if (s.kind >= kGdn && s.kind <= kBlockPos && s.index == kLive) state += s.bytes;
+        if (s.kind >= kGdn && s.kind <= kExtraState && s.index == kLive) state += s.bytes;
         if (s.kind == kKvRate) {   // the cells up to the match, at most the stored ones
             const int64_t cells = std::min<int64_t>(m.tokens + 4, s.meta[5]);
             n += (s.meta[0] + s.meta[1] + s.meta[2] + s.meta[3]) * (uint64_t) cells +
@@ -774,7 +774,7 @@ bool ConversationStore::load(const Match& m, SavedConversation& out, std::string
         if (P != n_ids && cut.live < 0) { error = "conversation store: no state at the match"; return false; }
         const ConversationCheckpoint& state = cut.live < 0 ? src.live : src.checkpoints[(size_t) cut.live];
         auto copy_state = [&](const ConversationCheckpoint& from, ConversationCheckpoint& to) {
-            to.state_a = from.state_a; to.state_b = from.state_b; to.state_c = from.state_c; to.state_d = from.state_d; to.state_e = from.state_e;
+            to.state_a = from.state_a; to.state_b = from.state_b; to.state_c = from.state_c; to.state_d = from.state_d; to.state_e = from.state_e; to.state_f = from.state_f;
         };
         copy_state(state, img.live);
         img.geometry = src.geometry;
@@ -890,12 +890,13 @@ bool ConversationStore::load(const Match& m, SavedConversation& out, std::string
             case kPle: return c.state_b;
             case kTails: return c.state_c;
             case kDead: return c.state_d;
-            default: return c.state_e;
+            case kBlockPos: return c.state_e;
+            default: return c.state_f;
         }
     };
     auto read_state = [&](size_t file, uint32_t index, ConversationCheckpoint& c) {
         for (const Section& s : opened[file].tab) {
-            if (s.kind < kGdn || s.kind > kBlockPos || s.index != index) continue;
+            if (s.kind < kGdn || s.kind > kExtraState || s.index != index) continue;
             CheckpointBytes& d = state_field(c, s.kind);
             d.resize(s.bytes);
             parts.push_back({file, &s, s.bytes, [&d](uint64_t o, const uint8_t* p, uint64_t n) { std::memcpy(d.data() + o, p, n); }});
@@ -903,7 +904,7 @@ bool ConversationStore::load(const Match& m, SavedConversation& out, std::string
     };
     if (cut.live < 0) {
         bool live = false;
-        for (const Section& s : opened[0].tab) live = live || (s.kind >= kGdn && s.kind <= kBlockPos && s.index == kLive);
+        for (const Section& s : opened[0].tab) live = live || (s.kind >= kGdn && s.kind <= kExtraState && s.index == kLive);
         if (!live) return fail("no state at the match", SIZE_MAX);
         read_state(0, kLive, img.live);
     }
@@ -1027,7 +1028,7 @@ bool ConversationStore::load(const Match& m, SavedConversation& out, std::string
         at.ids = img.live.ids;
         at.imgs = img.live.imgs;
         at.state_a = img.live.state_a; at.state_b = img.live.state_b; at.state_c = img.live.state_c; at.state_d = img.live.state_d;
-        at.state_e = img.live.state_e;
+        at.state_e = img.live.state_e; at.state_f = img.live.state_f;
         img.checkpoints.push_back(std::move(at));
     }
     out = std::move(img);
@@ -1081,6 +1082,7 @@ bool ConversationStore::put(SavedConversation&& image, uint64_t queue_cap) {
         image.live.state_c = {};
         image.live.state_d = {};
         image.live.state_e = {};
+        image.live.state_f = {};
     }
     const uint64_t bytes = image.bytes();
     std::lock_guard<std::mutex> lk(mu_);

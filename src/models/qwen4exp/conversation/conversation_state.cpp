@@ -97,7 +97,7 @@ bool metadata_bytes(const ConversationCheckpoint& c, size_t& total) {
     size_t ids = 0, images = 0;
     if (!product(ids, {c.ids.size(), sizeof(int32_t)}) ||
         !product(images, {c.imgs.size(), sizeof(ConversationImageKey)})) return false;
-    for (size_t n : {ids, images, c.state_a.size(), c.state_b.size(), c.state_c.size(), c.state_d.size(), c.state_e.size()})
+    for (size_t n : {ids, images, c.state_a.size(), c.state_b.size(), c.state_c.size(), c.state_d.size(), c.state_e.size(), c.state_f.size()})
         if (!add(total, n)) return false;
     return true;
 }

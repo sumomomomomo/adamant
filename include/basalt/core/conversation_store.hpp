@@ -32,7 +32,7 @@ namespace basalt::core {
 /// The stored-conversation format, written in every file header; a file of another format is dropped.  Change it
 /// whenever the stored bytes of a conversation change: the file layouts, the snapshot layout, the K/V or GDN state
 /// layout, a checkpoint state.
-inline constexpr uint32_t kConversationFormat = 2;
+inline constexpr uint32_t kConversationFormat = 3;
 
 struct ConversationStoreBuffer;
 

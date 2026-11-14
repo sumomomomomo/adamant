@@ -46,6 +46,7 @@ ConversationCheckpoint state(const std::vector<int32_t>& ids, size_t len) {
     fill(c.state_c, 12 * 3 * 512);
     fill(c.state_d, 12 * 512);
     fill(c.state_e, 12 * 4);
+    fill(c.state_f, 4096 + 17);
     return c;
 }
 
@@ -97,7 +98,7 @@ uint64_t dir_bytes(const std::string& dir, size_t* count = nullptr) {
 }
 
 bool same_state(const ConversationCheckpoint& a, const ConversationCheckpoint& b) {
-    return a.state_a == b.state_a && a.state_b == b.state_b && a.state_c == b.state_c && a.state_d == b.state_d && a.state_e == b.state_e;
+    return a.state_a == b.state_a && a.state_b == b.state_b && a.state_c == b.state_c && a.state_d == b.state_d && a.state_e == b.state_e && a.state_f == b.state_f;
 }
 
 // the checks every cut image passes: live = the state at `at`, K/V the prefix up to it
@@ -140,7 +141,7 @@ SavedConversation chat(const std::vector<int32_t>& ids, const std::vector<std::p
 }
 
 void copy_state_bytes(ConversationCheckpoint& to, const ConversationCheckpoint& from) {
-    to.state_a = from.state_a; to.state_b = from.state_b; to.state_c = from.state_c; to.state_d = from.state_d; to.state_e = from.state_e;
+    to.state_a = from.state_a; to.state_b = from.state_b; to.state_c = from.state_c; to.state_d = from.state_d; to.state_e = from.state_e; to.state_f = from.state_f;
 }
 
 // state files in `dir` ("<identity>-s<key>.bcs")
@@ -310,6 +311,7 @@ int main() {
         next.checkpoints.back().state_c = src.live.state_c;
         next.checkpoints.back().state_d = src.live.state_d;
         next.checkpoints.back().state_e = src.live.state_e;
+        next.checkpoints.back().state_f = src.live.state_f;
         next.live.ids = ids2;
         SavedConversation longer = image(ids2, {});
         for (size_t i = 0; i < next.kv.size(); ++i) {   // the old cells' bytes, then new ones
