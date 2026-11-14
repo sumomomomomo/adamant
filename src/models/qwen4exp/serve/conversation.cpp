@@ -34,7 +34,7 @@ bool checkpoint_restore(const ConvCheckpoint& c, basalt::core::SessionState& ss,
 /// The identity parked conversations on disk are written under (conversation_store.hpp): the model file
 /// (its size and samples of its bytes) and the settings that change a state's bytes - the K/V type, the rope, the draft
 /// layer, the image encoder, control vectors.  A file of another identity is never restored.
-uint64_t conversation_identity(const Options& o, const basalt::core::ModelGeometry& g) {
+uint64_t conversation_identity(const Options& o, const basalt::core::ModelGeometry& g, uint64_t drafter_identity) {
     using basalt::core::conversation_store_hash;
     char num[512];
     std::snprintf(num, sizeof num, " rope %.9g %.9g %.9g %.9g %.9g %.9g %.9g %.9g cvec %d %d %d %d", o.rope_scale,
@@ -47,6 +47,8 @@ uint64_t conversation_identity(const Options& o, const basalt::core::ModelGeomet
     const int64_t geo[] = {g.n_embd, g.n_layers, g.qsa_interval, g.ssm_state_size, g.ssm_v_heads, g.n_head_kv,
                            g.head_dim, g.idx_key_dim, g.n_expert, g.n_ff};
     h = conversation_store_hash(geo, sizeof geo, h);
+    const uint64_t draft_key[] = {1, drafter_identity};
+    h = conversation_store_hash(draft_key, sizeof draft_key, h);
     return basalt::core::conversation_store_hash_file(o.model, h);
 }
 
@@ -153,6 +155,7 @@ bool QfnRuntime::park_current(size_t held, int64_t kept) {
         err.clear();
     }
     estimate += stage_estimate;
+    if (!o.dflash2.empty()) estimate += dflash2.state_bytes((int64_t) live.size());
     // A park carrying its own retained K/V replaces memory the cache
     // already held, so capacity is make_room's call - it runs next either
     // way, and put()'s accounting still bounds the budget. The with-reuse
@@ -182,6 +185,7 @@ bool QfnRuntime::park_current(size_t held, int64_t kept) {
         if (draft0 != nullptr && !mtp.snapshot_main(err)) return false;   // a streamed draft ring's own window
         if (!basalt::core::conversation_snapshot_save(image, view, *rsp, g, draft0, err,
                 std::move(reuse), &reused_bytes)) return false;
+        if (!o.dflash2.empty() && !dflash2.save_state(image.live.state_f, (int64_t) live.size(), err)) return false;
         for (size_t k = 0; k < n_st; ++k) {   // the later stages
             auto& st = stages[k];
             const basalt::core::OnDevice on(st->dev);
@@ -240,6 +244,7 @@ bool QfnRuntime::checkpoint_at(int64_t L, std::vector<ConvCheckpoint>* parts, bo
     c.source = source;
     c.ids.assign(cur.begin(), cur.begin() + L);
     c.imgs = imgs_below(req_imgs, L);
+    if (!o.dflash2.empty() && !dflash2.save_state(c.state_f, L, err)) { ckpt_why = ": " + err; return false; }
     if (parts != nullptr) {
         if (parts->size() != stages.size() + 1) return false;
         c.state_a = std::move((*parts)[0].state_a);
@@ -300,6 +305,7 @@ size_t QfnRuntime::spill_to_disk(bool at_exit, size_t limit) {
             basalt::log::warn("basalt serve", "conversation cache: not written to disk (%s)", se.c_str());
             return;
         }
+        if (!o.dflash2.empty()) bytes += dflash2.state_bytes((int64_t) ids.size());
         if (at_exit) disk.flush();   // one image in RAM at a time
         if (!capture_admit(bytes, floor)) {
             basalt::log::info("basalt serve", "conversation cache: %zu tokens not written to disk (physical RAM "
@@ -311,6 +317,10 @@ size_t QfnRuntime::spill_to_disk(bool at_exit, size_t limit) {
             basalt::core::SavedConversation image;
             if ((mtp_kv != nullptr && !mtp.snapshot_main(se)) ||   // a streamed draft ring's own window
                 !basalt::core::conversation_snapshot_save(image, view, s, g, mtp_kv, se)) {
+                basalt::log::warn("basalt serve", "conversation cache: not written to disk (%s)", se.c_str());
+                return;
+            }
+            if (!o.dflash2.empty() && !dflash2.save_state(image.live.state_f, (int64_t) ids.size(), se)) {
                 basalt::log::warn("basalt serve", "conversation cache: not written to disk (%s)", se.c_str());
                 return;
             }
@@ -436,6 +446,7 @@ bool QfnRuntime::park_one(int b, std::string& e) {
         basalt::log::warn("basalt serve", "%s's idle conversation stays in VRAM (%s)", who.c_str(), se.c_str());
         return false;
     }
+    if (!o.dflash2.empty()) est += dflash2.state_bytes((int64_t) ids.size());
     size_t moved = 0;   // its checkpoints are in RAM already: they move into the image
     for (const ConvCheckpoint& c : cks) moved += c.bytes();
     // the RAM a capture leaves free: the conversation cache's, the disk tier's, and the reserve
@@ -466,6 +477,10 @@ bool QfnRuntime::park_one(int b, std::string& e) {
             if (!basalt::core::conversation_snapshot_save(image, bare, *cap, g,
                     static_cast<const basalt::core::QsaState*>(nullptr), se) ||
                 (mtp_kv != nullptr && !mtp.save_store(store, (int64_t) ids.size(), image.kv.emplace_back(), se))) {
+                basalt::log::warn("basalt serve", "%s's idle conversation stays in VRAM (%s)", who.c_str(), se.c_str());
+                return false;
+            }
+            if (!o.dflash2.empty() && !dflash2.save_state(image.live.state_f, (int64_t) ids.size(), se)) {
                 basalt::log::warn("basalt serve", "%s's idle conversation stays in VRAM (%s)", who.c_str(), se.c_str());
                 return false;
             }
@@ -537,7 +552,7 @@ int QfnRuntime::init_conversations() {
         if (o.prompt_cache <= 0 || !stages.empty()) {
             basalt::log::warn("basalt serve", "conversation cache on disk off: %s",
                               o.prompt_cache <= 0 ? "--prompt-cache 0" : "a layer split");
-        } else if (!disk.open(o.conversation_cache_dir, conversation_identity(o, g),
+        } else if (!disk.open(o.conversation_cache_dir, conversation_identity(o, g, dflash2.identity()),
                               (uint64_t) o.conversation_cache_disk_mib << 20, de)) {
             basalt::log::warn("basalt serve", "conversation cache on disk off: %s", de.c_str());
         } else {
@@ -573,7 +588,16 @@ int QfnRuntime::init_conversations() {
         basalt::protocol::emit("PL %lld %lld %.0f %.1f\n", (long long) at, (long long) pp_total, ms,
                                ms > 0.0 ? 1000.0 * (double) (at - pp_from) / ms : 0.0);
     };
+    if (!o.dflash2.empty()) {
+        sp.dflash2_layers = dflash2.tap_layers();
+        sp.dflash2_taps = dflash2.prompt_taps();
+        sp.dflash2_capacity = dflash2.context_window();
+    }
     sp.on_chunk = [&](const float* R_rows, int64_t T, int64_t p0, std::string& e) -> bool {
+        if (!o.dflash2.empty()) {
+            const int64_t first = std::max<int64_t>(0, T - dflash2.context_window());
+            if (!dflash2.context(dflash2.prompt_taps(), T - first, p0 + first, e)) return false;
+        }
         std::vector<int32_t> nxt((size_t) T);
         for (int64_t t = 0; t < T; ++t) nxt[(size_t) t] = (int32_t) cur[(size_t) (p0 + t + 1)];
         // batched through the prompt path when it can (one GPU: a layer split's drafter is on the last stage)

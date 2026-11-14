@@ -117,6 +117,8 @@ struct Options : CommonOptions {
     int spec_corrupt = 0;         // --spec-corrupt N > 0 replaces every Nth draft with a wrong token
     /// Names the model's draft layer when it has one (the file); empty means no drafter.
     std::string mtp;
+    int64_t conversation_cache_disk_min_tokens = 8192;
+    std::string dflash2;  ///< standalone Q8_0 DFlash2 pack; replaces MTP
     int64_t mtp_window = 32768;   ///< the draft layer attends to the last N cells (0 = every cell)
     /// The share (0..1) of each layer's distinct missed experts the GPU reads over PCIe from the pinned arena while the
     /// CPU computes the rest (host-planned verify windows).  Set from the startup link probe.

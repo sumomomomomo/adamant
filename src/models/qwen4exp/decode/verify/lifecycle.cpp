@@ -216,6 +216,7 @@ bool Verifier::init(const WeightTable& wt, const ModelGeometry& g, SessionState&
         tok_ = b.take<int32_t>(T); step_ = b.take<int32_t>(T * basalt::kernels::kStepCount);
         pos_ = b.take<int32_t>(T * (NH + NKV + IQ)); commit_ = b.take<int32_t>(2 + T);
         ple_ = b.take<float>(T * N); emb_ = b.take<float>(T * N); R_ = b.take<float>(T * HC * N);
+        if (!dflash2_layers_.empty()) dflash2_taps_ = b.take<float>(T * N * dflash2_layers_.size());
         mixed_ = b.take<float>(T * N); bo_ = b.take<float>(T * N);
         inj_ = b.take<float>(T * HC); inj2_ = b.take<float>(T * HC);
         lo_ = b.take<float>(T * (uint64_t) g.hc_lr); rs_ = b.take<float>(T * HC); xn_ = b.take<float>(T * HC * N);

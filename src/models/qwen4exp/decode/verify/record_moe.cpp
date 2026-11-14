@@ -1,4 +1,5 @@
 #include "common.hpp"
+#include "basalt/models/qwen4exp/kernels/dflash2.hpp"
 #include "record.hpp"
 #include "expert_plan.hpp"
 #include "basalt/models/qwen4exp/decode/verify.hpp"
@@ -210,6 +211,14 @@ bool Verifier::WindowRecorder::post(int64_t l) {
         }
     } else if (cvec().covers(l)) {
         cvec_apply(Rt(0), l, n, HC * N, v_.bo_, N, v_.inj2_, HC, true, cs);
+    }
+    for (size_t i = 0; i < v_.dflash2_layers_.size(); ++i) if (l == v_.dflash2_layers_[i]) {
+        const int64_t stride = (int64_t) v_.dflash2_layers_.size() * N;
+        float* taps = v_.dflash2_taps_ + i * N;
+        if (l == g.n_layers - 1 || cvec().covers(l))
+            df2_tap_rows(Rt(0), taps, stride, N, (int) HC, n, cs);
+        else
+            df2_tap_gr(Rt(0), HC * N, v_.bo_, N, v_.inj2_, HC, taps, stride, n, N, (int) HC, cs);
     }
     return true;
 }

@@ -43,6 +43,7 @@ bool QfnRequest::read_windows(int64_t a, int64_t b, std::string& e) {
             return false;
         }
         if (!runtime_.ver.commit(T, e) || (runtime_.mtp_on && !runtime_.mtp.prefill(runtime_.ver.final_R_all(), nxt.data(), T, q, e))) return false;
+        if (!runtime_.o.dflash2.empty() && !runtime_.dflash2.context(runtime_.ver.dflash2_taps(), T, q, e)) return false;
         q += T;
         runtime_.pp_reached = q;
     }

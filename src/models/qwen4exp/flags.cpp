@@ -61,6 +61,8 @@ bool parse_flag(const std::string& a, model::FlagArgs& args, Options& o, int& co
     else if (a == "--spec") { o.spec = std::atoi(args.next("--spec")); o.spec_given = true; }
     else if (a == "--spec-oracle") o.spec_oracle = args.next("--spec-oracle");
     else if (a == "--spec-corrupt") o.spec_corrupt = std::atoi(args.next("--spec-corrupt"));
+    else if (a == "--conversation-cache-disk-min-tokens") o.conversation_cache_disk_min_tokens = std::max(0LL, std::atoll(args.next("--conversation-cache-disk-min-tokens")));
+    else if (a == "--dflash2") o.dflash2 = args.next("--dflash2");
     else if (a == "--mtp-window") o.mtp_window = std::atoll(args.next("--mtp-window"));
     else if (a == "--adapt-every") { o.adapt_every = std::atoi(args.next("--adapt-every")); o.adapt_every_given = true; }
     else if (a == "--adapt-decay") { o.adapt_decay = (float) std::atof(args.next("--adapt-decay")); o.adapt_decay_set = true; }

@@ -1,4 +1,5 @@
 #include "run.hpp"
+#include "basalt/models/qwen4exp/kernels/dflash2.hpp"
 #include "basalt/models/qwen4exp/prefill/prefill.hpp"
 #include "basalt/models/qwen4exp/decode/mtp.hpp"
 #include "basalt/core/progress.hpp"
@@ -68,6 +69,13 @@ bool Prefill::Run::Chunk::layer(int64_t l) {
         }
         if (half == 1 && basalt::kernels::cvec().covers(l))   // --control-vector-scaled
             basalt::kernels::cvec_apply(m.R, l, T, D, nullptr, 0, nullptr, 0, false, m.cs);
+    }
+    if (owner.dflash2_taps != nullptr) {
+        const int64_t first = std::max<int64_t>(0, T - owner.dflash2_capacity);
+        const int64_t stride = (int64_t) owner.dflash2_layers.size() * N;
+        for (size_t i = 0; i < owner.dflash2_layers.size(); ++i) if (l == owner.dflash2_layers[i])
+            basalt::kernels::df2_tap_rows(m.R + first * D, owner.dflash2_taps + i * N,
+                                         stride, N, (int) HC, (int) (T - first), m.cs);
     }
     return true;
 }

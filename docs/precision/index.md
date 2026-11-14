@@ -4,6 +4,8 @@
 
 **Adamant:** the Ada port's paths and their validation state are in [Ada execution and validation](ada.md),
 which also lists the open Ampere (sm_86) work.
+The optional [DFlash2 drafter](dflash2.md) has its own precision and validation record.
+
 Adamant's own measurements are in the [README](../../README.md#measured-on-ada). The pages below describe upstream
 Basalt on Blackwell; their setup and numbers are not Adamant results.
 

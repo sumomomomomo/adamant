@@ -14,6 +14,7 @@
 namespace basalt::core {
 class ModelFile;
 class MtpDrafter;
+class Dflash2Drafter;
 }  // namespace basalt::core
 namespace basalt::kernels { class PleTable; }
 namespace basalt::kernels::cpu { class ExpertPool; }
@@ -62,6 +63,7 @@ struct Context {
     std::vector<int64_t>& slot_cap;
     bool& slot0_is_solo;
     basalt::core::MtpDrafter& mtp;
+    basalt::core::Dflash2Drafter& dflash2;
     const bool& mtp_on;
     const basalt::core::QsaState* const& mtp_kv;
     const int64_t& n_vocab;

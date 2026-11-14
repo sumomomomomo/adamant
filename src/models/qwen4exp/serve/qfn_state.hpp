@@ -51,6 +51,7 @@
 #include "basalt/models/qwen4exp/decode/native_head.hpp"
 #include "basalt/models/qwen4exp/decode/verify.hpp"
 #include "basalt/models/qwen4exp/decode/mtp.hpp"
+#include "basalt/models/qwen4exp/decode/dflash2.hpp"
 #include "basalt/models/qwen4exp/prefill/gemm.hpp"
 #include "basalt/models/qwen4exp/prefill/prefill.hpp"
 #include "basalt/models/qwen4exp/decode/native_dense.hpp"
@@ -141,7 +142,7 @@ inline constexpr double kPairFull = 0.70;   ///< the share of windows accepted w
 ConvStateSizes conv_state_sizes(const basalt::core::ModelGeometry& g, const basalt::core::SessionState& ss);
 bool checkpoint_save(ConvCheckpoint& c, const basalt::core::SessionState& ss, const basalt::core::ModelGeometry& g);
 bool checkpoint_restore(const ConvCheckpoint& c, basalt::core::SessionState& ss, const basalt::core::ModelGeometry& g);
-uint64_t conversation_identity(const Options& o, const basalt::core::ModelGeometry& g);
+uint64_t conversation_identity(const Options& o, const basalt::core::ModelGeometry& g, uint64_t drafter_identity);
 void seed_usage_from_prompt(std::vector<float>& usage, const std::vector<uint32_t>& hist, int64_t tokens,
                             const std::vector<int32_t>& host_res, int64_t n_expert, const basalt::core::PeerExperts& peer);
 
@@ -441,7 +442,7 @@ private:
     bool pump(bool may_start);
     bool pipe_drain();
     size_t spill_to_disk(bool at_exit, size_t limit) override;
-    int64_t disk_min_tokens() const override { return 8192; }
+    int64_t disk_min_tokens() const override { return o.conversation_cache_disk_min_tokens; }
     bool probe_adapt(const std::string& cmd, std::string& e);
     int init_prompt();
     int init_verify();

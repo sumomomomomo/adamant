@@ -379,6 +379,8 @@ public:
     Verifier* next_stage() const { return next_; }
     /// Token t's residual after the last layer, (hc, n_embd) on the device, valid until the next `run`.
     const float* final_R(int t) const;
+    void set_dflash2_taps(const std::vector<int>& layers) { dflash2_layers_ = layers; }
+    const float* dflash2_taps() const { return dflash2_taps_; }
     const float* final_R_all() const { return next_ ? next_->final_R_all() : R_; }
 
     /// The GPU plan the pool writes each layer (VRAM hits + the PCIe share of the misses); give it to the
@@ -662,6 +664,8 @@ private:
     // device
     void* arena_ = nullptr;
     int32_t *tok_ = nullptr, *step_ = nullptr, *pos_ = nullptr, *commit_ = nullptr;
+    std::vector<int> dflash2_layers_;
+    float* dflash2_taps_ = nullptr;
     float *ple_ = nullptr, *emb_ = nullptr, *R_ = nullptr, *mixed_ = nullptr, *bo_ = nullptr;
     float *inj_ = nullptr, *inj2_ = nullptr, *lo_ = nullptr, *rs_ = nullptr, *xn_ = nullptr;
     uint8_t* xq_ = nullptr;                                   // T columns of q8_1

@@ -28,6 +28,12 @@ int run_engine(Options& o, std::vector<program::GpuCard>& chosen_cards) {
             return fatal_start_error(o.model + " lacks the dense, dense.index, experts, experts.layout or hc8 section");
         }
         if (!srcs.mtp_dense.empty() && !srcs.mtp_dense_index.empty() && !srcs.mtp_experts.empty()) o.mtp = o.model;
+        if (!o.dflash2.empty()) {
+            if (!o.serve || o.batch > 0 || !o.layer_split.empty() || o.spec < 2 || o.spec > 8) {
+                return fatal_start_error("--dflash2 requires --serve, --spec 2..8, no batch slots and no layer split");
+            }
+            o.mtp.clear();
+        }
         // the expert profile: the one --expert-profile names, else the engine's for this model when it has one.
         // A release keeps data/ beside bin/, a source build reads the tree it came from
         uint64_t prof_bytes = 0;

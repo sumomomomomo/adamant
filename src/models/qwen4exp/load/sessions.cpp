@@ -380,6 +380,9 @@ int sessions(Context& context) {
         if (!o.mtp.empty() && !mtp.load(basalt::core::MtpFiles::from(srcs), draft_geometry, ss, pipe_want ? basalt::core::kMtpChainMax : o.spec, err, o.mtp_window)) { basalt::log::error("basalt generate", "%s%s", err.c_str(), vram_free_note().c_str()); return 1; }
         mtp.set_ple_session(&ss);
     }
+    basalt::core::Dflash2Drafter dflash2;
+    if (!o.dflash2.empty() && !dflash2.load(o.dflash2, 0, err)) return fatal_start_error(err);
+    context.dflash2 = &dflash2;
     basalt::core::qsa_set_kv_elastic(0);   // every later state: whole
     const bool mtp_on = !o.mtp.empty();
     const basalt::core::QsaState* const mtp_kv = mtp_on ? &mtp.kv_state() : nullptr;   // the draft layer's K/V, if any
@@ -426,6 +429,7 @@ int sessions(Context& context) {
                      (unsigned long long) native_head.weight_bytes(),
                      std::chrono::duration<double>(std::chrono::steady_clock::now() - head_t0).count());
     }
+    if (!o.dflash2.empty() && !dflash2.bind(wt, &native_head, err)) return fatal_start_error(err);
     std::vector<float> logits((size_t) n_vocab);
     float* d_logits = nullptr;
     if (cudaMalloc(&d_logits, (size_t) n_vocab * 4) != cudaSuccess) {

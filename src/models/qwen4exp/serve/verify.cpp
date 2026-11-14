@@ -133,6 +133,7 @@ int QfnRuntime::init_verify() {
     for (const auto& xpe : xpeers)
         if (xpe->valid()) ver.add_peer(xpe.get());
     ver.set_cpu_warm(drive.d.pool, drive.d.src);
+    if (!o.dflash2.empty()) ver.set_dflash2_taps(dflash2.tap_layers());
     if (!ver.init(wt, g, ss, vh, native_head.loaded() ? &native_head : nullptr, std::max({o.spec, o.batch, 2}), err) ||
         (mtp_on && !mtp.bind(wt, multi_gpu ? &mtp_head : &native_head, ver.final_R_all(), err))) {
         basalt::log::error("basalt serve", "%s", err.c_str());
@@ -189,6 +190,10 @@ int QfnRuntime::capture_windows() {
         basalt::log::info("basalt serve", "solo windows of %d more slot sessions captured in %.0f ms (%.1f MiB of VRAM)",
                      o.batch - 1, std::chrono::duration<double, std::milli>(Clock::now() - tw).count(),
                      (double) ((int64_t) free0 - (int64_t) free1) / 1048576.0);
+    }
+    if (!o.dflash2.empty() && !dflash2.prepare(ver.dflash2_taps(), err)) {
+        basalt::log::error("basalt dflash2", "%s", err.c_str());
+        return 1;
     }
     S = o.spec;
     S_mtp = o.mtp_max_t > 0 ? std::min(o.mtp_max_t, S) : S;   // the MTP's windows; suffixes go up to S

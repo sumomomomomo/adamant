@@ -17,12 +17,13 @@ bool QfnRequest::slot_draft_in(int slot) {
 void QfnRequest::drop_stale_reuse() { runtime_.conversations->drop_reuse_unless(runtime_.rsp); }
 bool QfnRequest::release_room() { return runtime_.kv_release(*runtime_.rsp, n + runtime_.kKvGrowCells, runtime_.err); }
 bool QfnRequest::checkpoint_mount(const ConvCheckpoint& c) {
+    if (!runtime_.o.dflash2.empty() && !runtime_.dflash2.validate_state(c.state_f, (int64_t) c.ids.size(), runtime_.err)) return false;
     if (!checkpoint_restore(c, *runtime_.rsp, runtime_.g) || c.stage_parts.size() != runtime_.stages.size()) return false;
     for (size_t i = 0; i < runtime_.stages.size(); ++i) {
         const basalt::core::OnDevice on(runtime_.stages[i]->dev);
         if (!checkpoint_restore(c.stage_parts[i], runtime_.stages[i]->ss, runtime_.g)) return false;
     }
-    return true;
+    return runtime_.o.dflash2.empty() || runtime_.dflash2.restore_state(c.state_f, (int64_t) c.ids.size(), runtime_.err);
 }
 
 bool QfnRequest::restore_begin() {
@@ -60,6 +61,15 @@ Flow QfnRequest::slot_bind() {
 }
 
 void QfnRequest::validate_incoming() {
+    if (incoming && !runtime_.o.dflash2.empty()) {
+        bool valid = runtime_.dflash2.validate_state(incoming->live.state_f, (int64_t) incoming->live.ids.size(), runtime_.err);
+        for (const auto& c : incoming->checkpoints)
+            valid = valid && runtime_.dflash2.validate_state(c.state_f, (int64_t) c.ids.size(), runtime_.err);
+        if (!valid) {
+            basalt::log::warn("basalt serve", "conversation cache: discard draft state (%s)", runtime_.err.c_str());
+            incoming.reset(); runtime_.err.clear();
+        }
+    }
     // Reject the entire image before parking/overwriting the outgoing
     // state. Invalid entries can safely fall back to its existing prefix.
     if (incoming && incoming->stage_images.size() != runtime_.stages.size()) {
@@ -180,6 +190,8 @@ Flow QfnRequest::restore_image() {
         bool restored = basalt::core::conversation_snapshot_restore(*incoming, *runtime_.rsp,
                 runtime_.g, runtime_.mtp_kv, runtime_.err) == basalt::core::ConversationRestore::restored;
         if (restored && runtime_.mtp_on) runtime_.mtp.wrote(0, (int64_t) incoming->live.ids.size());
+        if (restored && !runtime_.o.dflash2.empty())
+            restored = runtime_.dflash2.restore_state(incoming->live.state_f, (int64_t) incoming->live.ids.size(), runtime_.err);
         int failed_stage = -1;
         for (size_t i = 0; restored && i < runtime_.stages.size(); ++i) {   // the later stages' parts
             const basalt::core::OnDevice on(runtime_.stages[i]->dev);
@@ -228,6 +240,7 @@ void QfnRequest::retain_image() {
 }
 
 bool QfnRequest::session_reset() {
+        if (!runtime_.o.dflash2.empty()) runtime_.dflash2.reset();
         basalt::core::session_zero(*runtime_.rsp, runtime_.g, nullptr, runtime_.main_cs);
         cudaStreamSynchronize(runtime_.main_stream);
         for (auto& st : runtime_.stages) {

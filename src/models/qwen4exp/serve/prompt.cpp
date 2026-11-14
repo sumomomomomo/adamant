@@ -266,9 +266,9 @@ bool QfnRequest::park_read(int64_t q, int ys, std::string& ye, int64_t chunk) {
 }
 
 int QfnRuntime::init_prompt() {
-    if ((!no_spec && (o.spec < 2 || o.mtp.empty())) || o.prefill_chunk <= 0 ||
+    if ((!no_spec && (o.spec < 2 || (o.mtp.empty() && o.dflash2.empty()))) || o.prefill_chunk <= 0 ||
         (graph_hits && (thits.d_res == nullptr || host_res.empty()))) {
-        basalt::log::error("basalt serve", "needs --spec T (0 for none; T >= 2 also needs the model's draft layer) "
+        basalt::log::error("basalt serve", "needs --spec T (0 for none; T >= 2 also needs MTP or --dflash2) "
                              "and --prefill CHUNK (and a fillable "
                              "--expert-cache; the graphed hit path additionally needs an expert profile)");
         return 2;

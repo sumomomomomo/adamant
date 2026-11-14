@@ -160,6 +160,9 @@ public:
     /// Called after every chunk with the chunk's final multi-stream residual rows (device,
     /// T x hc*n_embd, valid until the next chunk) and the chunk's first position; the MTP draft layer builds its
     /// K/V from them.  The prefill stream is synchronized before the call.
+    std::vector<int> dflash2_layers;
+    float* dflash2_taps = nullptr;
+    int64_t dflash2_capacity = 0;
     std::function<bool(const float* R_rows, int64_t T, int64_t pos0, std::string& err)> on_chunk;
 
     /// Called on the host before each layer of a chunk with the layers done so far, the layer count, the chunk's

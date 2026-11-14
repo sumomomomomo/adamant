@@ -476,6 +476,15 @@ inline bool QfnRequest::draft_next(int T, int a, int e0, int TB, bool from_sfx, 
             held.T = TB;
             for (int i = 0; i < TB; ++i) held.win[(size_t) i] = win_b[(size_t) i];
             std::swap(cv, ov);
+        } else if (!runtime_.o.dflash2.empty()) {
+            after_launch();
+            const int committed = (int) ((int64_t) consumed.size() - p);
+            drafted = will_draft
+                ? runtime_.dflash2.draft(cv->dflash2_taps(), committed, p, outv[(size_t) committed - 1],
+                                           drafts.data(), dprob.data(), runtime_.err)
+                : runtime_.dflash2.context(cv->dflash2_taps(), committed, p, runtime_.err);
+            n_chain = basalt::core::Dflash2Drafter::kDrafts;
+            draft_failed = !drafted;
         } else if (will_draft && runtime_.mtp_on) {
             runtime_.mtp.set_launch_hook(after_launch);
             pair_hint = pair_req && full_ema >= kPairFull;

@@ -1,4 +1,5 @@
 #pragma once
+#include "basalt/models/qwen4exp/decode/dflash2.hpp"
 
 #include "basalt/models/qwen4exp/shared_names.hpp"
 #include "helpers.hpp"
@@ -71,6 +72,7 @@ struct Context {
     uint64_t* slot_kv_cuda0 = nullptr;
     bool* slot0_is_solo = nullptr;
     basalt::core::MtpDrafter* mtp = nullptr;
+    basalt::core::Dflash2Drafter* dflash2 = nullptr;
     const bool* mtp_on = nullptr;
     const basalt::core::QsaState *const* mtp_kv = nullptr;
     const int64_t* n_vocab = nullptr;

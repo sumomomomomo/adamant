@@ -169,7 +169,10 @@ int resident_plan(Context& context) {
                 return !basalt::core::conversation_session_sizes(g, u, z, ze) ||
                        basalt::core::CheckpointBytes::allocator_type::reserve(z.gdn, keep);
             };
-            ok = reserve(ss);
+            if (!o.dflash2.empty())
+                ok = basalt::core::CheckpointBytes::allocator_type::reserve(
+                    context.dflash2->state_bytes(o.max_context), keep);
+            ok = ok && reserve(ss);
             for (size_t i = 0; ok && i < stages.size(); ++i) ok = reserve(stages[i]->ss);
         }
         if (!ok) return fatal_start_error("out of host memory for the prompt path's and the checkpoints' buffers");
