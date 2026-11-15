@@ -409,6 +409,10 @@ void quantize_act(const float* x, int64_t rows, int64_t cols, void* xa, void* st
     ck(cudaGetLastError(), "quantize_act");
 }
 
+const int32_t* group_offsets(const void* scratch, int n_expert) {
+    return tables(const_cast<void*>(scratch), n_expert).off;
+}
+
 void group(const int32_t* ids, int64_t n, int k, int n_expert, void* scratch, int32_t* slot, int32_t* src,
            void* stream) {
     if (n_expert < 1 || n_expert > 1024) {

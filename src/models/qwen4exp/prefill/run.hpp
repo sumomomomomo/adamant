@@ -13,6 +13,7 @@
 #include "basalt/models/qwen4exp/kernels/qsa.hpp"
 #include "basalt/models/qwen4exp/decode/layer.hpp"
 #include "basalt/core/peer_experts.hpp"
+#include "basalt/models/qwen4exp/prefill/moe_fused_iq.hpp"
 #include <algorithm>
 #include <atomic>
 #include <string>
@@ -127,6 +128,17 @@ struct Prefill::Run::Chunk {
     const bool stream_all = m.ring > STAGE && T >= stream_all_min() && m.src != nullptr;
     // the peer takes the rows of a chunk only up to its buffers' size (the routed-only chunks)
     PeerPrefill* const ppc = m.pp && m.peer_share && T <= m.pp->T_max ? m.pp.get() : nullptr;
+    bool large_peer_reported = false;
+    bool large_peer_layer(int64_t l) const {
+        if (T > kFusedPeerChunkLimit || !stream_all || !m.peer_share || !m.large_peer_compute || !m.large_peer ||
+            !m.pp || !lay0.native || !mmq_plan().layer[(size_t) l]) return false;
+        const auto& f = lay0.fmt[(size_t) l];
+        return fused::native_supported(f.gu_type, f.d_type, f.up_type);
+    }
+    bool large_peer_owns(int64_t l, int32_t e) const {
+        return large_peer_layer(l) && m.pp->peer->has(l, e) &&
+               (!m.host_res || m.host_res[(size_t) l * g.n_expert + e] < 0);
+    }
     struct StreamEntry { int32_t l, e; const uint8_t* blob; int job; const uint8_t* pdev; };
     std::vector<StreamEntry> seq;
     std::vector<size_t> seq_start;

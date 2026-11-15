@@ -46,6 +46,9 @@ void quantize_act(const float* x, int64_t rows, int64_t cols, void* xa, void* st
 /// The routing `ids` [n = tokens * k] -> per expert its rows (counts, offsets, the 64-row tile list, in `scratch`,
 /// group_bytes(n, n_expert)), `slot[i]` = the row of pair i (the row of the per-slot outputs the combine reads) and
 /// `src[row]` = its token (i / k).  The order of the rows within an expert is not fixed; no output depends on it.
+/// Device offsets of each expert's output range (n_expert + 1 entries).
+const int32_t* group_offsets(const void* scratch, int n_expert);
+
 void group(const int32_t* ids, int64_t n, int k, int n_expert, void* scratch, int32_t* slot, int32_t* src,
            void* stream);
 

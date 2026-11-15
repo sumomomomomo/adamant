@@ -3,6 +3,7 @@
 #include "common.hpp"
 #include "staging.hpp"
 #include "peer.hpp"
+#include "basalt/models/qwen4exp/prefill/fused_peer.hpp"
 #include "basalt/models/qwen4exp/prefill/prefill.hpp"
 #include "basalt/models/qwen4exp/decode/mtp.hpp"
 #include "basalt/models/qwen4exp/decode/layout.hpp"
@@ -130,6 +131,8 @@ struct Prefill::Impl {
     int32_t* tok_dev = nullptr;
     std::vector<int32_t> tok_host;
     std::unique_ptr<PeerPrefill> pp;         // multi-GPU: the peer GPU's expert share (set_peer)
+    std::unique_ptr<FusedPeer> large_peer;
+    bool large_peer_compute = false;
     bool peer_share = true;                  // set_peer_share
     core::PeerExperts* ring_peer = nullptr;  // --peer-exclusive: experts held only there are copied from its memory
     // set_ring_remote: another card's cache, read for the experts without a pinned host copy

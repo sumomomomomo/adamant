@@ -1,5 +1,6 @@
 #include "basalt/models/qwen4exp/shared_names.hpp"
 #include "context.hpp"
+#include "basalt/models/qwen4exp/prefill/fused_peer.hpp"
 
 namespace basalt::models::qwen4exp::generate {
 
@@ -113,6 +114,8 @@ int resident_plan(Context& context) {
                                      (dev == o.peer_device ? (uint64_t) peer_split_bytes(d0) + peer_prompt_bytes() : 0);
             const uint64_t share = (uint64_t) std::count(o.peer_devices.begin(), o.peer_devices.end(), dev);
             rooms[i].bytes = fb > reserve ? ((uint64_t) fb - reserve) / share : 0;
+            // Diagnostic comparisons keep tier placement stable across CUDA context variations.
+            if (o.prefill_peer_large > 0) rooms[i].bytes &= ~((256ull << 20) - 1);
             rooms[i].gbps = o.peer_gbps[i];
         }
         std::vector<std::pair<int32_t, int32_t>> ranked;
@@ -155,7 +158,10 @@ int resident_plan(Context& context) {
     {
         const int64_t chunk_max = o.prefill_auto ? auto_ceiling : o.prefill_chunk;
         bool ok = true;
-        if (o.serve && chunk_max > 0) {
+        if (o.serve && o.prefill_peer_large && !o.no_peer_prefill && o.peer_device >= 1 && chunk_max > 0)
+            ok = basalt::core::host_plan(basalt::prefill::FusedPeer::host_bytes(
+                std::min(chunk_max, basalt::prefill::kFusedPeerChunkLimit)));
+        if (ok && o.serve && chunk_max > 0) {
             for (int b = 0; ok && b < 2; ++b) ok = basalt::core::host_plan((size_t) chunk_max * (size_t) g.n_embd * sizeof(float));
             for (size_t i = 0; ok && i < stages.size(); ++i)   // the main card and every stage but the last hand rows on
                 for (int b = 0; ok && b < 2; ++b)

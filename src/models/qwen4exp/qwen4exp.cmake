@@ -132,6 +132,7 @@ add_library(model_qwen4exp_prefill STATIC src/models/qwen4exp/prefill/gemm.cu sr
   src/models/qwen4exp/prefill/expert_fused.cpp
   src/models/qwen4exp/prefill/expert_mmq.cpp
   src/models/qwen4exp/prefill/expert_fp16.cpp
+  src/models/qwen4exp/prefill/fused_peer.cpp
   src/models/qwen4exp/prefill/peer_experts.cpp
   src/models/qwen4exp/prefill/expert_stream.cpp
   src/models/qwen4exp/prefill/combine.cpp

@@ -19,6 +19,21 @@ bool Prefill::Run::Chunk::Experts::fused() {
     if (fused_nat) fused::quantize_act_native(m.mixed, T, N, m.Xq, m.cs);
     else fused::quantize_act(m.mixed, T, N, m.Xq, m.cs);
     fused::group(m.ids, T * K, (int) K, (int) m.g->n_expert, m.GU, m.slot_dev, m.src_dev, m.cs);
+    const bool distributed = chunk.large_peer_layer(l);
+    if (distributed) {
+        std::vector<fused::Batch> batches;
+        for (int e = 0; e < m.g->n_expert;) {
+            if (!chunk.large_peer_owns(l, e)) { ++e; continue; }
+            fused::Batch b; b.e0 = e;
+            while (e < m.g->n_expert && e - b.e0 < fused::kMaxBatch && chunk.large_peer_owns(l, e)) {
+                b.blob[e - b.e0] = m.pp->peer->slot_ptr(l, e); ++e;
+            }
+            b.e1 = e; batches.push_back(b);
+        }
+        const auto& f = lay.fmt[(size_t) l];
+        const fused::NativeGeom ng{f.gu_type, f.d_type, f.gu_row, f.d_row, f.up_off, f.down_off, f.up_type, f.up_row};
+        if (!m.large_peer->start(std::move(batches), ng, T, m.Xq, m.GU, m.src_dev, m.Dm, m.cs, err)) return false;
+    }
     // launches over the experts in id order, each at most kMaxBatch experts of which at most a
     // third of the ring streamed: the next batch's blobs arrive while one computes.  An expert
     // the routing did not pick has no tiles; its ring slot is given back with its batch.
@@ -26,10 +41,12 @@ bool Prefill::Run::Chunk::Experts::fused() {
     size_t k = seq_start[(size_t) l];
     const size_t kend = seq_start[(size_t) l + 1];
     for (int32_t e = 0; e < m.g->n_expert;) {
+        if (distributed && chunk.large_peer_owns(l, e)) { ++e; continue; }
         fused::Batch b;
         b.e0 = e;
         const size_t k0 = k;
         for (; e < m.g->n_expert && e - b.e0 < fused::kMaxBatch; ++e) {
+            if (distributed && chunk.large_peer_owns(l, e)) break;
             if (k < kend && seq[k].e == e) {
                 if (k - k0 == per) break;
                 b.blob[e - b.e0] = m.stage_dev[k % (size_t) m.ring];
@@ -63,6 +80,12 @@ bool Prefill::Run::Chunk::Experts::fused() {
             consumed = k;
             give_back(consumed);
         }
+    }
+    if (distributed) {
+        if (!m.large_peer->wait(m.cs, err)) return false;
+        if (!chunk.large_peer_reported) basalt::log::info("basalt prefill", "large peer: %lld tokens, %lld expert rows returned at layer %lld",
+                                      (long long) T, (long long) m.large_peer->rows(), (long long) l);
+        chunk.large_peer_reported = true;
     }
     return true;
 }

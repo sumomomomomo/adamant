@@ -25,6 +25,7 @@ bool Prefill::Run::Chunk::start_stream() {
             for (int32_t e = 0; e < m.g->n_expert; ++e) {
                 if (m.host_res && m.cache && m.host_res[(size_t) l * m.g->n_expert + e] >= 0) continue;
                 if (ppc && ppc->peer && ppc->peer->has(l, e)) continue;   // multi-GPU: computed on (or read from) the peer
+                if (large_peer_owns(l, e)) continue;
                 int job = -1;
                 const uint8_t* b = nullptr;
                 if (m.ring_peer && m.ring_peer->exclusive() && m.ring_peer->has(l, e)) {   // no host copy: from the peer

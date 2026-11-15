@@ -17,6 +17,8 @@
 
 namespace basalt::prefill {
 using namespace detail;
+namespace { int large_peer_mode = 0; }
+void Prefill::set_large_peer(int mode) { large_peer_mode = mode; }
 
 void Prefill::set_ring_peer(core::PeerExperts* peer) {
     impl_->ring_peer = peer != nullptr && peer->valid() ? peer : nullptr;
@@ -99,7 +101,9 @@ uint64_t Prefill::peer_bytes(int64_t chunk, bool streamed_share) {
     PeerPrefill pp;
     pp.T_max = std::min<int64_t>(chunk, streamed_share ? stream_all_min() - 1 : kPeerSlowRows);
     pp.G = pp.T_max;
-    return PeerShare::peer_bytes(share_dims(pp.T_max, pp.G, mmq_plan()));
+    return PeerShare::peer_bytes(share_dims(pp.T_max, pp.G, mmq_plan())) +
+           (large_peer_mode > 0 && chunk >= stream_all_min() ?
+                FusedPeer::device_bytes(std::min(chunk, kFusedPeerChunkLimit)) : 0);
 }
 
 bool Prefill::set_peer(core::PeerExperts* peer, bool streamed_share, std::string& err) {
@@ -113,6 +117,18 @@ bool Prefill::set_peer(core::PeerExperts* peer, bool streamed_share, std::string
     bool ok = make_peer(peer, t_routed, pp, err);
     if (!ok) return false;
     m.pp = std::move(pp);
+    if (large_peer_mode > 0 && m.T_max >= stream_all_min()) {
+        const int64_t capacity = std::min(m.T_max, kFusedPeerChunkLimit);
+        m.large_peer_compute = large_peer_mode == 1;
+        m.large_peer = std::make_unique<FusedPeer>();
+        if (!m.large_peer->open(m.device, peer->device(), capacity, (int) m.g->n_expert, err)) {
+            m.large_peer.reset(); m.large_peer_compute = false; return false;
+        }
+        basalt::log::info("basalt prefill", "large peer GPU %d: up to %lld tokens, %llu MiB device, %llu MiB host",
+                          peer->device(), (long long) capacity,
+                          (unsigned long long) (FusedPeer::device_bytes(capacity) >> 20),
+                          (unsigned long long) (FusedPeer::host_bytes(capacity) >> 20));
+    }
     return true;
 }
 
