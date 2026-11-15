@@ -70,20 +70,43 @@ bool Prefill::Run::Chunk::Experts::Group::group() {
         ++m.cnt[(size_t) e];
     }
     // multi-GPU: the rows of the experts the peer computes go last, as one block [rows_local, T*K)
-    if (ppc && pre_mmq) {
+    if (!ppcs.empty() && pre_mmq) {
         on_peer.assign((size_t) m.g->n_expert, 0);
+        peer_orders.resize(ppcs.size());
+        peer_rows.assign(ppcs.size(), 0);
         for (int32_t e = 0; e < m.g->n_expert; ++e) {
             const int32_t c = m.cnt[(size_t) e];
-            if (c == 0 || (m.host_res && m.cache && m.host_res[(size_t) l * m.g->n_expert + e] >= 0) ||
-                !ppc->peer || !ppc->peer->has(l, e))
+            if (c == 0 || (m.host_res && m.cache && m.host_res[(size_t) l * m.g->n_expert + e] >= 0))
                 continue;
-            if (rows_peer + c > ppc->cap_rows) { continue; }
-            on_peer[(size_t) e] = 1;
-            rows_peer += c;
+            for (size_t p = 0; p < ppcs.size(); ++p) {
+                if (ppcs[p] != ppc) continue;
+                if (!ppcs[p]->peer || !ppcs[p]->peer->has(l, e) || peer_rows[p] + c > ppcs[p]->cap_rows) continue;
+                on_peer[(size_t) e] = (int32_t) p + 1;
+                peer_rows[p] += c;
+                rows_peer += c;
+                break;
+            }
         }
         rows_local = T * K - rows_peer;
     }
     cpu_select();
+    // Additional peers take only work the primary GPU would run; the CPU's arithmetic stays fixed.
+    if (!peer_orders.empty()) {
+        for (int32_t e = 0; e < m.g->n_expert; ++e) {
+            const int32_t c = m.cnt[(size_t) e];
+            if (c == 0 || on_peer[(size_t) e] || (!on_cpu.empty() && on_cpu[(size_t) e]) ||
+                (m.host_res && m.cache && m.host_res[(size_t) l * m.g->n_expert + e] >= 0)) continue;
+            for (size_t p = 0; p < ppcs.size(); ++p) {
+                if (ppcs[p] == ppc || !ppcs[p]->peer || !ppcs[p]->peer->has(l, e) ||
+                    peer_rows[p] + c > ppcs[p]->cap_rows) continue;
+                on_peer[(size_t) e] = (int32_t) p + 1;
+                peer_rows[p] += c;
+                rows_peer += c;
+                rows_local -= c;
+                break;
+            }
+        }
+    }
     {
         int32_t r = 0;
         for (int32_t e = 0; e < m.g->n_expert; ++e)
@@ -92,8 +115,9 @@ bool Prefill::Run::Chunk::Experts::Group::group() {
                 r += m.cnt[(size_t) e];
             }
         // the peer's rows in order_peer's order: its groups need them contiguous
-        for (int32_t e = 0; e < m.g->n_expert && !on_peer.empty(); ++e)
-            if (on_peer[(size_t) e]) { m.off[(size_t) e] = r; r += m.cnt[(size_t) e]; }
+        for (size_t p = 0; p < peer_orders.size(); ++p)
+            for (int32_t e = 0; e < m.g->n_expert; ++e)
+                if (on_peer[(size_t) e] == (int32_t) p + 1) { m.off[(size_t) e] = r; r += m.cnt[(size_t) e]; }
         for (int32_t e = 0; e < m.g->n_expert && !on_cpu.empty(); ++e)   // the CPU's block, last
             if (on_cpu[(size_t) e]) { m.off[(size_t) e] = r; r += m.cnt[(size_t) e]; }
         m.off[(size_t) m.g->n_expert] = r;
@@ -114,8 +138,10 @@ bool Prefill::Run::Chunk::Experts::Group::group() {
     }
     // the experts, in id order: resident ones from VRAM, the others through the staging ring
     for (int32_t e = 0; e < m.g->n_expert; ++e)
-        if (m.cnt[(size_t) e] > 0 && (on_cpu.empty() || !on_cpu[(size_t) e]))
-            (!on_peer.empty() && on_peer[(size_t) e] ? order_peer : order).push_back(e);
+        if (m.cnt[(size_t) e] > 0 && (on_cpu.empty() || !on_cpu[(size_t) e])) {
+            if (!on_peer.empty() && on_peer[(size_t) e]) peer_orders[(size_t) on_peer[(size_t) e] - 1].push_back(e);
+            else order.push_back(e);
+        }
     // CPU share: the pool runs the CPU's experts while this thread stages and runs the GPU's; their
     return true;
 }

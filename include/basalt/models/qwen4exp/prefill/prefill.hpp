@@ -132,6 +132,7 @@ public:
     /// chunks, and the streamed ones up to a fixed size on the FP4 experts (the same bits as this GPU's), with the rows
     /// crossing through host memory.
     bool set_peer(core::PeerExperts* peer, bool streamed_share, std::string& err);
+    void set_extra_peers(const std::vector<core::PeerExperts*>& peers, bool compute);
     /// The bytes `set_peer` takes on the peer card for chunks of up to `chunk` tokens (0: no peer share); the peer tier
     /// leaves them free when it sizes itself.
     static uint64_t peer_bytes(int64_t chunk, bool streamed_share);

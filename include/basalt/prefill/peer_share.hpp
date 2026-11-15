@@ -38,6 +38,7 @@ public:
     /// Device bytes on the second card, and pinned host bytes, `open` takes.
     static uint64_t peer_bytes(const Dims& d);
     static uint64_t host_bytes(const Dims& d);
+    static uint64_t main_bytes(const Dims& d);
 
     PeerShare();
     ~PeerShare();
@@ -97,6 +98,8 @@ public:
     /// `stream` (main card) waits for the rows of the last `run`. The host waits only until the second card's calls are
     /// issued (a thread of its own issues them). False when one of them failed.
     bool join(void* stream, std::string& err);
+    /// Waits for every issued transfer and product before an abandoned request reuses its buffers.
+    bool wait(std::string& err);
 
 private:
     struct Impl;

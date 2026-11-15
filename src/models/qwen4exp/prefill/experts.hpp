@@ -22,6 +22,7 @@ using namespace detail;
 struct Prefill::Run::Chunk::Experts {
     struct Group;
     Experts(Chunk& chunk, int64_t l) : chunk(chunk), l(l) {}
+    ~Experts();
     bool execute();
     bool fused();
     bool finish();
@@ -66,6 +67,7 @@ struct Prefill::Run::Chunk::Experts {
     decltype(Chunk::lay0)& lay0 = chunk.lay0;
     decltype(Chunk::stream_all)& stream_all = chunk.stream_all;
     decltype(Chunk::ppc)& ppc = chunk.ppc;
+    decltype(Chunk::ppcs)& ppcs = chunk.ppcs;
     decltype(Chunk::seq)& seq = chunk.seq;
     decltype(Chunk::seq_start)& seq_start = chunk.seq_start;
     decltype(Chunk::consumed)& consumed = chunk.consumed;
@@ -96,7 +98,7 @@ struct Prefill::Run::Chunk::Experts {
     const int mmq_ut = lay.native ? lay.fmt[(size_t) l].up_type : 42;   // the up rows' type
     const bool fused_nat = use_mmq && stream_all && lay.native && fused::native_supported(mmq_gt, mmq_dt, mmq_ut);
     const bool fused_l = (use_mmq && stream_all && !lay.native && fused::enabled()) || fused_nat;
-    bool peer_now = false;                // multi-GPU: the peer computed rows of this layer (MMQ path only)
+    std::vector<PeerPrefill*> active_peers;
     // CPU share: this layer's CPU experts (rows [T * K - rows_cpu, T * K) of Dm) run on a thread that
     // reads on_cpu, so the future (which waits for the thread) is declared after it
     std::vector<char> on_cpu;
@@ -162,6 +164,7 @@ struct Prefill::Run::Chunk::Experts::Group {
     decltype(Experts::lay0)& lay0 = experts.lay0;
     decltype(Experts::stream_all)& stream_all = experts.stream_all;
     decltype(Experts::ppc)& ppc = experts.ppc;
+    decltype(Experts::ppcs)& ppcs = experts.ppcs;
     decltype(Experts::seq)& seq = experts.seq;
     decltype(Experts::seq_start)& seq_start = experts.seq_start;
     decltype(Experts::consumed)& consumed = experts.consumed;
@@ -186,7 +189,7 @@ struct Prefill::Run::Chunk::Experts::Group {
     decltype(Experts::mmq_ut)& mmq_ut = experts.mmq_ut;
     decltype(Experts::fused_nat)& fused_nat = experts.fused_nat;
     decltype(Experts::fused_l)& fused_l = experts.fused_l;
-    decltype(Experts::peer_now)& peer_now = experts.peer_now;
+    decltype(Experts::active_peers)& active_peers = experts.active_peers;
     decltype(Experts::on_cpu)& on_cpu = experts.on_cpu;
     decltype(Experts::cpu_ms)& cpu_ms = experts.cpu_ms;
     decltype(Experts::cpu_fut)& cpu_fut = experts.cpu_fut;
@@ -201,9 +204,11 @@ struct Prefill::Run::Chunk::Experts::Group {
     const bool cpu_maybe = owner.cpu_pool_ != nullptr && !stream_all && m.src != nullptr && lay.native &&
                            owner.next_ == nullptr && owner.stage_lb_ == 0;
     const bool pre_mmq = mmq_plan().any && mmq_plan().layer[(size_t) l];
-    std::vector<char> on_peer;
+    std::vector<int32_t> on_peer;
     int64_t rows_local = T * K, rows_peer = 0;
-    std::vector<int32_t> order, order_peer;
+    std::vector<int32_t> order;
+    std::vector<std::vector<int32_t>> peer_orders;
+    std::vector<int64_t> peer_rows;
     // a gate/up slot (gate rows, then up rows) and the gate's bytes in it; mmq_gub - mmq_gb or less are the up's
     const size_t mmq_gub = use_mmq ? mmq::gu_slot_bytes(mmq_gt, mmq_ut, 640, N) : 0;
     const size_t mmq_gb = use_mmq ? mmq::matrix_bytes(mmq_gt, 640, N) : 0, mmq_ub = use_mmq ? mmq::matrix_bytes(mmq_ut, 640, N) : 0;

@@ -104,5 +104,6 @@ The scheduling-only experiments did not reach either short-prompt target.
 Computing another resident tier's experts exceeded the 512-token target and
 approached the 256-token target in the separate controlled test. This is
 development evidence, not a broad quality or workload validation. The prototype
-engine changes were reverted after testing; the existing routed-only path,
-fused-peer cutoff and serving defaults remain unchanged.
+engine changes were reverted after that test. The later
+[daily-use hardening](extra-peer-prefill.md) records the bounded additional-tier
+path, memory fallback and full BF16 quality comparison.

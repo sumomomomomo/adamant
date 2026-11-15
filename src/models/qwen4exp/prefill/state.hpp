@@ -131,6 +131,8 @@ struct Prefill::Impl {
     int32_t* tok_dev = nullptr;
     std::vector<int32_t> tok_host;
     std::unique_ptr<PeerPrefill> pp;         // multi-GPU: the peer GPU's expert share (set_peer)
+    std::vector<std::unique_ptr<PeerPrefill>> extra_pp;
+    bool extra_peer_compute = false;
     std::unique_ptr<FusedPeer> large_peer;
     bool large_peer_compute = false;
     bool peer_share = true;                  // set_peer_share

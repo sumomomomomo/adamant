@@ -252,6 +252,10 @@ uint64_t PeerShare::host_bytes(const Dims& d) {
     return sum;
 }
 
+uint64_t PeerShare::main_bytes(const Dims& d) {
+    return mmq::q8_bytes(kQuantRows, d.n_embd);
+}
+
 bool PeerShare::open(int main_device, int peer_device, const Dims& d, std::string& err) {
     if (d.bufs < 2 || d.bufs > kMaxBufs || d.stage_bufs < 1 || d.stage_bufs > kMaxBufs) {
         err = "peer share: 2 or 3 launch buffers, 1 to 3 staging buffers";
@@ -534,7 +538,27 @@ bool PeerShare::join(void* stream, std::string& err) {
         return false;
     }
     const core::OnDevice od(m_->main);
-    cudaStreamWaitEvent((cudaStream_t) stream, m_->ev_end, 0);
+    const cudaError_t e = cudaStreamWaitEvent((cudaStream_t) stream, m_->ev_end, 0);
+    if (e != cudaSuccess) { err = std::string("peer share: ") + cudaGetErrorString(e); return false; }
+    return true;
+}
+
+bool PeerShare::wait(std::string& err) {
+    m_->drain();
+    cudaError_t status = m_->err;
+    auto sync = [&](cudaStream_t s) {
+        const cudaError_t e = cudaStreamSynchronize(s);
+        if (status == cudaSuccess) status = e;
+    };
+    {
+        const core::OnDevice od(m_->peer);
+        for (auto s : {m_->s_stage, m_->s_prod, m_->s_out}) sync(s);
+    }
+    {
+        const core::OnDevice od(m_->main);
+        for (auto s : {m_->s_main, m_->s_rows}) sync(s);
+    }
+    if (status != cudaSuccess) { err = std::string("peer share: ") + cudaGetErrorString(status); return false; }
     return true;
 }
 

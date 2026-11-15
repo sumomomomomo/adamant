@@ -345,6 +345,21 @@ int main() {
             // the share's rows lie expert by expert; put each at its pair
             std::vector<float> block((size_t) T * K * N), got((size_t) T * K * N);
             cudaMemcpy(block.data(), ddst, block.size() * 4, cudaMemcpyDeviceToHost);
+            for (int drain = 0; drain < 2; ++drain) {
+                ck(cudaMemsetAsync(ddst, 0, block.size() * sizeof(float), st), "clear reused rows");
+                if (!share.run(L, dx, T, ex, ddst, st, err)) throw std::runtime_error(err);
+                if (drain == 0) {
+                    if (!share.wait(err)) throw std::runtime_error(err);
+                } else {
+                    if (!share.join(st, err)) throw std::runtime_error(err);
+                    ck(cudaStreamSynchronize(st), "join after drained request");
+                }
+                std::vector<float> replay(block.size());
+                ck(cudaMemcpy(replay.data(), ddst, replay.size() * sizeof(float), cudaMemcpyDeviceToHost), "reused rows");
+                if (std::memcmp(replay.data(), block.data(), block.size() * sizeof(float)) != 0)
+                    throw std::runtime_error("drained share or subsequent reuse changed its rows");
+            }
+            std::printf("peer share: drained request and subsequent reuse are bitwise identical\n");
             size_t r = 0;
             for (int e = 0; e < E; ++e)
                 for (int32_t p : rt.pairs[(size_t) e]) std::memcpy(got.data() + (size_t) p * N, block.data() + N * r++, (size_t) N * 4);

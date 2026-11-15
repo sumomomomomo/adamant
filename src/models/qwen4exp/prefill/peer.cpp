@@ -64,7 +64,7 @@ static PeerShare::Dims share_dims(int64_t Tp, int64_t G, const MmqPlan& mp) {
     return d;
 }
 static bool make_peer(core::PeerExperts* peer, int64_t T_max, std::unique_ptr<PeerPrefill>& out,
-                      std::string& err) {
+                      std::string& err, bool optional = false) {
     auto pp = std::make_unique<PeerPrefill>();
     pp->peer = peer;
     pp->T_max = std::min<int64_t>(T_max, stream_all_min() - 1);
@@ -74,12 +74,29 @@ static bool make_peer(core::PeerExperts* peer, int64_t T_max, std::unique_ptr<Pe
     int prim = 0;
     cudaGetDevice(&prim);
     pp->dev = peer->device();
+    const auto dims = share_dims(Tp, pp->G, mmq_plan());
+    if (optional) {
+        size_t main_free = 0, peer_free = 0, total = 0;
+        cudaError_t status = cudaMemGetInfo(&main_free, &total);
+        {
+            const core::OnDevice od(pp->dev);
+            if (status == cudaSuccess) status = cudaMemGetInfo(&peer_free, &total);
+        }
+        bool known = false;
+        const uint64_t host_free = platform::ram_budget(&known);
+        if (status != cudaSuccess || main_free < PeerShare::main_bytes(dims) + (64ull << 20) ||
+            peer_free < PeerShare::peer_bytes(dims) + (128ull << 20) ||
+            (known && host_free < PeerShare::host_bytes(dims) + (64ull << 20))) {
+            (void) cudaGetLastError();
+            err = "insufficient spare memory for the additional prefill share";
+            return false;
+        }
+    }
     bool ok = true;
     size_t fb = 0, tb = 0;
     if (ok) {
         pp->share = std::make_unique<PeerShare>();
-        std::string e2;
-        ok = pp->share->open(prim, pp->dev, share_dims(Tp, pp->G, mmq_plan()), e2);
+        ok = pp->share->open(prim, pp->dev, dims, err);
     }
     {
         const core::OnDevice od(pp->dev);
@@ -87,7 +104,7 @@ static bool make_peer(core::PeerExperts* peer, int64_t T_max, std::unique_ptr<Pe
     }
     if (!ok) {
         cudaGetLastError();
-        err = "prefill peer: the peer's buffers do not fit (raise --peer-reserve-mib or use --no-peer-prefill)";
+        if (err.empty()) err = "prefill peer: the peer's buffers do not fit";
         return false;
     }
     basalt::log::info("basalt prefill", "peer GPU %d computes its experts' rows of each prompt chunk up to %lld tokens, "
@@ -104,6 +121,23 @@ uint64_t Prefill::peer_bytes(int64_t chunk, bool streamed_share) {
     return PeerShare::peer_bytes(share_dims(pp.T_max, pp.G, mmq_plan())) +
            (large_peer_mode > 0 && chunk >= stream_all_min() ?
                 FusedPeer::device_bytes(std::min(chunk, kFusedPeerChunkLimit)) : 0);
+}
+
+void Prefill::set_extra_peers(const std::vector<core::PeerExperts*>& peers, bool compute) {
+    Impl& m = *impl_;
+    m.extra_pp.clear();
+    m.extra_peer_compute = false;
+    for (auto* peer : peers) {
+        if (peer == nullptr || !peer->valid()) continue;
+        std::unique_ptr<PeerPrefill> pp;
+        std::string err;
+        if (!make_peer(peer, std::min(m.T_max, kExtraPeerChunkLimit), pp, err, true)) {
+            basalt::log::warn("basalt prefill", "GPU %d: %s; additional peer disabled", peer->device(), err.c_str());
+            continue;
+        }
+        m.extra_pp.push_back(std::move(pp));
+    }
+    m.extra_peer_compute = compute;
 }
 
 bool Prefill::set_peer(core::PeerExperts* peer, bool streamed_share, std::string& err) {

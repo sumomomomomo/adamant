@@ -489,6 +489,11 @@ int QfnRuntime::init_prompt() {
             err.clear();
         }
         split_peer_rows = sp.peer_routed_rows_max();
+        if (o.prefill_peer_extra) {
+            std::vector<basalt::core::PeerExperts*> extras;
+            for (auto& xp : xpeers) if (xp->valid()) extras.push_back(xp.get());
+            sp.set_extra_peers(extras, o.prefill_peer_extra == 1);
+        }
     }
 
     // its buffers' and the hand-off buffers' size; a larger chunk reads on CUDA0

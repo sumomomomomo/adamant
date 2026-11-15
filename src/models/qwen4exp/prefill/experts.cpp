@@ -7,6 +7,13 @@
 namespace basalt::prefill {
 using namespace detail;
 
+Prefill::Run::Chunk::Experts::~Experts() {
+    for (auto* peer : active_peers) {
+        std::string err;
+        if (!peer->share->wait(err)) basalt::log::error("basalt prefill", "%s", err.c_str());
+    }
+}
+
 bool Prefill::Run::Chunk::Experts::execute() {
     if (fused_l) {
         if (!fused()) return false;
