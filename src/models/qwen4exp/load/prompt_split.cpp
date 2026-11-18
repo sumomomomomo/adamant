@@ -168,7 +168,8 @@ int prompt_split(Context& context) {
     auto split_price = [&](int64_t a0, int64_t b0, int64_t prompt_end, int max_stages) -> engine_local::SplitPricing {
         engine_local::SplitPricing sp0;
         const int64_t n_tok = b0 - a0;
-        if (paired_floor > 0 && split_chunk_cap > 0 && n_tok <= 2 * read_cap()) return sp0;
+        if (paired_floor > 0 && split_chunk_cap > 0 &&
+            n_tok < basalt::prefill::paired_stage_min_tokens(read_cap())) return sp0;
         // two chunks or more, the draft layer's window within the last two the main card hands on (their final rows
         // come back for it in the hand-off buffers)
         const auto [chunk, head] = serve_loans::one_card_chunks(n_tok, read_cap(), true, o.prefill_auto_fit);

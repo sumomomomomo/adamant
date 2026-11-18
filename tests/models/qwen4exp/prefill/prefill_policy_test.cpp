@@ -15,6 +15,9 @@ int main() {
                 check(floor == (next && peers == 2 && !alike && first && layers == 48 && width == 2560 ? 26 : 0));
             }
         }
+    check(basalt::prefill::paired_stage_min_tokens(32768) == 32769);
+    check(basalt::prefill::paired_stage_min_tokens(16384) == 32769);
+    check(basalt::prefill::paired_stage_min_tokens(65536) == 131073);
     Cutoffs c;
     check(c.extra_max == 2048 && c.large_max == 4096 && c.reserve_large(6144));
     check(c.routed_capacity(2560) == 2559 && c.extra_capacity() == 2048 && c.large_capacity() == 4096);

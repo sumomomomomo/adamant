@@ -37,6 +37,10 @@ inline int paired_stage_layer_floor(bool native_next, int peers, int stage_limit
     return native_next && peers == 2 && stage_limit == 2 && first_alike && layers == 48 && width == 2560 ? 26 : 0;
 }
 
+inline int64_t paired_stage_min_tokens(int64_t chunk_cap) {
+    return (chunk_cap == 32768 ? chunk_cap : 2 * chunk_cap) + 1;
+}
+
 inline Cutoffs& cutoffs() { static Cutoffs value; return value; }
 
 inline bool parse_cutoffs(const std::string& text, Cutoffs& out) {

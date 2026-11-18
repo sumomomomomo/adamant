@@ -16,8 +16,10 @@ is retained. The measured paired layout keeps layers 0–25 on the primary and
 26–47 on the first peer; the cost model prices this constraint before deciding
 whether to split. Its stage image covers the wider range selected at startup.
 
-Parts that fit within two configured prompt chunks stay on the primary. With a
-32,768-token cap, the new path therefore starts above 65,536 fresh tokens.
+With a 32,768-token cap, parts that fit within one configured prompt chunk stay
+on the primary, and the paired path is eligible above 32,768 fresh tokens per
+prompt part. Other chunk caps retain the two-chunk activation floor. This
+counts newly read tokens, not the total cached context.
 Images, active decoding slots, unsuitable links and insufficient memory retain
 the existing decline/fallback rules. The prompt retains the primary-only
 chunk boundaries. The final chunk finishes on the primary after the peer's
@@ -47,6 +49,9 @@ formats, model identity and disk-cache policy are unchanged.
 
 ## Correctness checks
 
+The machinery checks in this section use a two-chunk activation floor; the
+one-chunk boundary has the separate coverage below.
+
 Development checks use RTX 3090 Ti / RTX 3090 / RTX 3080 at enforced
 400 / 320 / 250 W limits. For arithmetic comparisons, the tiers hold exactly
 5,255 / 9,726 / 8,187 experts, adaptation is disabled, KV is int8 with its full
@@ -71,6 +76,46 @@ Cancellation after 32,768 completed tokens, followed by a retry of the full
 logit hashes. A disk-cache process restart reuses 131,065 tokens and reads seven;
 its continuation and logit hashes match too. These integration checks use a
 separate cache directory.
+
+## One-chunk activation boundary
+
+A warmed, within-process A/B/B/A diagnostic keeps the 32,768-token cap, layer
+floor 26, fixed 30 GiB RAM expert copies, four live checkpoints, disabled
+adaptation and zero prompt-prefix reuse. Disk caching remains enabled in an
+isolated directory. Power limits are 400 / 320 / 250 W on the cards above.
+These are agent-run development measurements.
+
+| Fresh tokens in a prompt part | PP throughput change versus primary only |
+|---|---:|
+| 33,792 | +19.8% |
+| 40,960 | +17.9% |
+| 49,152 | +16.4% |
+| 65,536 | +21.6% |
+
+Below the configured cap, subdividing requests into additional pipeline chunks
+does not establish a useful general improvement. The retained rule preserves
+the primary-only chunk boundaries and does not introduce that subdivision.
+
+A separate fixed-tier A/B/B/A check holds 6,077 / 9,717 / 8,192 experts, fully
+resident int8 KV and 30 GiB RAM copies at the same power limits. At 32,769 fresh
+tokens the greedy continuation and logit hashes differ; at 49,152 the text
+matches but logit hashes differ. At 33,792 and 65,536 both match. The boundary
+change is therefore not bitwise-neutral at every length, even though weight
+formats and arithmetic kernels are unchanged. Greedy output can change.
+
+The ordinary BF16 gate uses 100 contexts of 512 tokens, 25,500 scored rows,
+int8 KV, full Q8_0 PLE, fixed 20 GiB RAM copies and disabled adaptation at the
+same power limits. Initial expert placement is 7,669 / 9,331 / 7,576 in both
+runs. Every scored row matches the previous measurement exactly.
+
+| BF16 gate metric | Previous | One-chunk boundary |
+|---|---:|---:|
+| PPL | 3.30383093 | 3.30383093 |
+| Mean KLD | 0.09661079 | 0.09661079 |
+| Top-1 agreement | 89.69020% | 89.69020% |
+
+This short-context gate does not exercise the cross-card path or establish
+absolute BF16 quality at 32K context.
 
 ## Development performance
 
