@@ -6,6 +6,10 @@
 实验性[大分块对等预填充](large-peer-prefill.md)在保留专家运算的前提下测试双设备调度。
 [短提示词调查](small-prefill.md)记录传输成本、调度实验及额外专家辅助卡原型。
 [额外专家层级路径](extra-peer-prefill.md)记录其受限派发、内存回退及 BF16 质量比较。
+[诊断性长提示词预填充实验](long-prefill.md)记录 Q5_0 融合下投影、IQ4_XS v2 门控/上投影及大分块验证。
+
+[实验性三 GPU 阈值](peer-prefill-cutoffs.md)记录路由与流式路径的切换点及质量检查。
+[双卡长提示词流水线](paired-prefill.md)说明按完整层调度、匹配 HC8 权重和检查点恢复。
 
 Adamant 自己的测量结果在
 [README](../../../README.zh-CN.md#ada-上的实测)。下面的页面描述的是 Blackwell 上的上游 Basalt；其中的测量环境与数字

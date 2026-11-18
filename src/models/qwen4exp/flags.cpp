@@ -157,6 +157,9 @@ bool parse_flag(const std::string& a, model::FlagArgs& args, Options& o, int& co
     else if (a == "--peer-adapt-swaps") o.peer_adapt_swaps = std::atoi(args.next("--peer-adapt-swaps"));
     else if (a == "--prefill-peer-large") o.prefill_peer_large = std::atoi(args.next("--prefill-peer-large"));
     else if (a == "--prefill-peer-extra") o.prefill_peer_extra = std::atoi(args.next("--prefill-peer-extra"));
+    else if (a == "--diag-prefill-cutoffs") o.diag_prefill_cutoffs = args.next("--diag-prefill-cutoffs");
+    else if (a == "--diag-prefill-long") o.diag_prefill_long = true;
+    else if (a == "--prefill-native-next") o.prefill_native_next = true;
     else if (a == "--no-peer-prefill") o.no_peer_prefill = true;
     else if (a == "--expert-profile-save") o.expert_profile_save = args.next("--expert-profile-save");
     else if (a == "--expert-profile-save-every")

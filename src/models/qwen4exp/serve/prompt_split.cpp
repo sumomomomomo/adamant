@@ -1,5 +1,6 @@
 // src/models/qwen4exp/serve/prompt_split.cpp - request prompt_split operations.
 #include "basalt/models/qwen4exp/shared_names.hpp"
+#include "basalt/models/qwen4exp/prefill/tap_relay.hpp"
 #include "qfn_request.hpp"
 
 namespace basalt::models::qwen4exp::serve {
@@ -78,6 +79,41 @@ bool QfnRequest::read_split(int64_t a0, int64_t b0, const SplitPlan& plan, bool&
         run.push_back(st);
     }
     PromptStage& last = *run.back();
+    const bool relay_on = !runtime_.o.dflash2.empty() && runtime_.o.prompt_cache > 0 &&
+                          runtime_.o.prompt_cache_every > 0;
+    const int relay_rows = relay_on ? (int) std::min<int64_t>(chunk, runtime_.dflash2.context_window()) : 0;
+    PromptTapRelay tap_relay;
+    struct ResetTaps {
+        std::vector<PromptStage*>& stages;
+        ~ResetTaps() {
+            for (PromptStage* st : stages) {
+                st->sp.dflash2_taps = nullptr;
+                st->sp.dflash2_layers.clear();
+                st->sp.dflash2_capacity = 0;
+            }
+        }
+    } reset_taps{run};
+    if (relay_on) {
+        const uint64_t host_bytes = (uint64_t) relay_rows * runtime_.dflash2.tap_layers().size() *
+                                    (uint64_t) runtime_.g.n_embd * sizeof(float) * (2 * run.size() + 2);
+        const uint64_t floor = std::max<uint64_t>(runtime_.disk_floor,
+                                                 (uint64_t) runtime_.o.conversation_cache_min_free_mib << 20);
+        if (!runtime_.capture_admit(host_bytes, floor)) {
+            e = "prompt split: insufficient RAM for checkpoint features";
+            return false;
+        }
+        std::vector<int> devices{0};
+        for (PromptStage* st : run) devices.push_back(st->dev);
+        if (!tap_relay.init(devices, runtime_.dflash2.tap_layers(), (int) runtime_.g.n_embd, relay_rows, e)) {
+            (void) cudaGetLastError();
+            return false;
+        }
+        for (PromptStage* st : run) {
+            st->sp.dflash2_layers = runtime_.dflash2.tap_layers();
+            st->sp.dflash2_taps = tap_relay.data(st->dev);
+            st->sp.dflash2_capacity = relay_rows;
+        }
+    }
     std::vector<basalt::prefill::PrefillStats> st0;
     for (PromptStage* st : run) st0.push_back(st->sp.stats());
     const basalt::prefill::PrefillStats sm0 = runtime_.sp.stats();
@@ -239,6 +275,15 @@ bool QfnRequest::read_split(int64_t a0, int64_t b0, const SplitPlan& plan, bool&
     const bool ck_on = runtime_.o.prompt_cache > 0 && runtime_.o.prompt_cache_every > 0;
     int64_t ck_next = runtime_.pp_next_check;
     std::map<int64_t, ConvCheckpoint> ck_main;
+    std::map<int64_t, std::vector<float>> ck_taps;
+    const auto tap_rows_at = [&](int64_t done) {
+        int64_t start = a0;
+        for (int64_t count : part_chunks) {
+            if (start + count == done) return (int) std::min<int64_t>(count, relay_rows);
+            start += count;
+        }
+        return 0;
+    };
     runtime_.sp.on_stage_chunk = [&](int64_t done, std::string& ce) -> bool {
         main_done = done;
         if (!ck_on || done < ck_next) return true;
@@ -249,8 +294,15 @@ bool QfnRequest::read_split(int64_t a0, int64_t b0, const SplitPlan& plan, bool&
             ce = "saving a conversation checkpoint failed";
             return false;
         }
+        std::vector<float> taps;
+        if (relay_on) {
+            const int rows = tap_rows_at(done);
+            taps.resize(tap_relay.elements(rows));
+            if (!tap_relay.read(0, runtime_.sp.dflash2_taps, 0, (int) lb, rows, taps, ce)) return false;
+        }
         std::lock_guard<std::mutex> lk(relay_mu);
         ck_main[done] = std::move(part);
+        if (relay_on) ck_taps[done] = std::move(taps);
         return true;
     };
     for (PromptStage* stp : run) {
@@ -265,12 +317,15 @@ bool QfnRequest::read_split(int64_t a0, int64_t b0, const SplitPlan& plan, bool&
                 ce = "saving a conversation checkpoint failed: " + se;
                 return false;
             }
+            if (relay_on && it != ck_main.end() &&
+                !tap_relay.read(stp->dev, stp->sp.dflash2_taps, (int) stp->l0, (int) stp->l1,
+                                tap_rows_at(done), ck_taps.at(done), ce)) return false;
             return true;
         };
     }
     // every stage done with its chunks before the kept one at `c_end`: their state to the main session, and
     // the slots' experts back on a thread while the main card reads the kept chunk
-    auto state_back = [&](int64_t c_end, std::string& ce) -> bool {
+    auto state_back = [&](int64_t c_end, std::string& ce, bool refill = true) -> bool {
         const auto tc = Clock::now();
         bool ok = true;
         for (PromptStage* st : run)
@@ -286,11 +341,12 @@ bool QfnRequest::read_split(int64_t a0, int64_t b0, const SplitPlan& plan, bool&
         given = true;
         given_at = c_end;
         ms_copy = std::chrono::duration<double, std::milli>(Clock::now() - tc).count();
-        refill_issue = std::async(std::launch::async, [&] {
-            bool issued = true;
-            for (PromptStage* st : run) issued = st->tier->give_back(st->lent, refill_err) && issued;
-            return issued;
-        });
+        if (refill)
+            refill_issue = std::async(std::launch::async, [&] {
+                bool issued = true;
+                for (PromptStage* st : run) issued = st->tier->give_back(st->lent, refill_err) && issued;
+                return issued;
+            });
         return true;
     };
     last.sp.on_chunk = [&](const float* R_rows, int64_t T, int64_t p0, std::string& ce) -> bool {
@@ -330,20 +386,35 @@ bool QfnRequest::read_split(int64_t a0, int64_t b0, const SplitPlan& plan, bool&
             relays.push_back({p0 + r0, T - r0, h + (size_t) r0 * HCN});
         }
         std::vector<ConvCheckpoint> whole(1);
+        std::vector<float> taps;
         {
             std::lock_guard<std::mutex> lk(relay_mu);
             const auto it = ck_main.find(p0 + T);
             if (it != ck_main.end()) {
                 whole[0] = std::move(it->second);
                 ck_main.erase(it);
+                if (relay_on) {
+                    taps = std::move(ck_taps.at(p0 + T));
+                    ck_taps.erase(p0 + T);
+                }
             }
         }
         std::string se;
-        if (!whole[0].ids.empty() &&
-            (!basalt::core::conversation_checkpoint_save_layers(whole[0], last.ss, runtime_.g, last.l0, last.l1, se) ||
-             !runtime_.checkpoint_at(p0 + T, &whole))) {
-            ce = "saving a conversation checkpoint failed" + (se.empty() ? runtime_.ckpt_why : ": " + se);
-            return false;
+        if (!whole[0].ids.empty()) {
+            if (!basalt::core::conversation_checkpoint_save_layers(whole[0], last.ss, runtime_.g, last.l0, last.l1, se)) {
+                ce = "saving a conversation checkpoint failed: " + se;
+                return false;
+            }
+            const int rows = (int) std::min<int64_t>(T, relay_rows);
+            if (relay_on &&
+                (!tap_relay.read(last.dev, last.sp.dflash2_taps, (int) last.l0, (int) last.l1, rows, taps, ce) ||
+                 !tap_relay.upload(0, taps, rows, ce))) return false;
+            const basalt::core::OnDevice on0(0);
+            if (relay_on && !runtime_.dflash2.context(tap_relay.data(0), rows, p0 + T - rows, ce)) return false;
+            if (!runtime_.checkpoint_at(p0 + T, &whole)) {
+                ce = "saving a conversation checkpoint failed" + runtime_.ckpt_why;
+                return false;
+            }
         }
         // its last chunk before the kept one: every stage is done with its own
         if (p0 + T >= c_cut.load() && !state_back(p0 + T, ce)) return false;
@@ -364,6 +435,16 @@ bool QfnRequest::read_split(int64_t a0, int64_t b0, const SplitPlan& plan, bool&
     // have been done before the cut)
     const int64_t c_end = c_cut.load();
     const int64_t b_end = yield_q >= 0 ? yield_q : b0;
+    // A stopped read still leaves usable checkpoints: their positional cells must be on the main card.
+    if (!ok && !given && last_end.load() > a0) {
+        std::string ce;
+        if (!state_back(last_end.load(), ce, false)) {
+            e = ce;
+            auto& checks = runtime_.checks;
+            checks.erase(std::remove_if(checks.begin(), checks.end(),
+                         [&](const ConvCheckpoint& c) { return (int64_t) c.ids.size() > a0; }), checks.end());
+        }
+    }
     if (ok && !given && yield_q >= 0) ok = state_back(c_end, e);
     // the stages' state must come back exactly at the main card's kept chunk: anything else is an error
     if (ok && (!given || (yield_q < 0 && given_at != c_end))) {

@@ -26,6 +26,7 @@ Ampere 尚未经过验证。sm_86 构建可以编译；Ampere 硬件上仍未完
 | 操作 | Adamant 实现 | 需要验证的数值后果 |
 |---|---|---|
 | MMQ prompt 专家 | 现有整数 MMA tile，不使用 programmatic dependent launch；保留全部已配置格式 | 不打算改动算术或 tile 选择。不假定跨设备相等。 |
+| 诊断性原生长提示词预填充专家 | 融合 Q5_0 下投影、v2 IQ4_XS 门控/上投影，以及大分块的更深暂存缓冲 | 数值变化与 Ampere 实测验证记录在[长提示词预填充](long-prefill.md)。 |
 | NVFP4 prompt 专家 | 所有 prompt 尺寸都走整数 MMQ，而非原生 FP4 tensor 指令 | 长 prompt 下激活改用 MMQ 的 q8_1 舍入，而不是 E2M1/UE4M3 舍入。这使数值相对上游的原生 FP4 路径发生变化。权重字节保持同一格式。 |
 | 稠密 tensor-core 投影与 QSA 中段 | 本地异步 copy 搬运与受支持的整数 MMA 指令 | 必须对照参考实现比较缩放因子的施加与归约顺序，并测试 token 宽度不变性。 |
 | 融合的超连接读取 | 用协作式异步 copy 取代 tensor-map 传输；hc8 存储与未融合实现保留 | copy/布局等价与算术不变只是设计意图，而非实测的逐位一致。选择这一读取而非未融合读取可能改变数值。 |

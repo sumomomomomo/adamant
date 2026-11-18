@@ -93,7 +93,7 @@ void fill_matrix(uint8_t* m, ggml_type t, int64_t rows, int64_t cols, std::mt199
     std::uniform_real_distribution<float> sc(lo, 6.0f * lo);
     for (size_t i = 0; i < nb * bs; ++i) m[i] = (uint8_t) byte(rng);
     for (size_t b = 0; b < nb; ++b) {
-        const ggml_fp16_t h = ggml_fp32_to_fp16(sc(rng));
+        const ggml_fp16_t h = ggml_fp32_to_fp16(sc(rng) * (t == GGML_TYPE_Q5_0 && (rng() & 1) ? -1.f : 1.f));
         std::memcpy(m + b * bs, &h, 2);
     }
 }
@@ -264,6 +264,7 @@ void run_fused(const Pair& p, const Geo& geo, FusedBufs& b, const float* x_dev, 
 
 struct Err {
     double rms = 0, worst = 0;   // RMS error / RMS of the reference; the worst row's max |error| / its max |ref|
+    double max_abs = 0, max_rel = 0;
 };
 // y_a[row_a(i)] against y_b[row_b(i)] for every pair i (rows of N values)
 template <typename RA, typename RB>
@@ -280,6 +281,8 @@ Err compare(const std::vector<float>& a, RA row_a, const std::vector<float>& b, 
             e2 += d * d;
             r2 += (double) yb[o] * yb[o];
             me = std::max(me, std::fabs(d));
+            out.max_abs = std::max(out.max_abs, std::fabs(d));
+            out.max_rel = std::max(out.max_rel, std::fabs(d) / std::max(1e-6, (double) std::fabs(yb[o])));
             mr = std::max(mr, (double) std::fabs(yb[o]));
         }
         if (mr > 0) out.worst = std::max(out.worst, me / mr);
@@ -392,7 +395,7 @@ void reference_part(const Pair& p, cudaStream_t s) {
 
     // v2 (the v2 kernels: IQ3_XXS gate/up, IQ4_NL down): against the reference as above, and next to the kernels
     // above it differs only in the rounding order (H's int8 codes may move by one)
-    if (p.gu == GGML_TYPE_IQ3_XXS || p.d == GGML_TYPE_IQ4_NL) {
+    if (p.gu == GGML_TYPE_IQ3_XXS || p.gu == GGML_TYPE_IQ4_XS || p.d == GGML_TYPE_IQ4_NL || p.d == GGML_TYPE_Q5_0) {
         fused::native_v2_override(1);
         if (!fused::native_v2_ready()) {
             std::printf("  v2: does not run on this device - skipped\n");
@@ -406,8 +409,11 @@ void reference_part(const Pair& p, cudaStream_t s) {
             auto frow2 = [&](size_t i) { return (int64_t) slot2[i]; };
             const Err e2 = compare(y_2, frow2, ref, pair, (size_t) rows);
             const Err e21 = compare(y_2, frow2, y_f, frow, (size_t) rows);
+            const Err e2m = compare(y_2, frow2, y_mmq, mrow, (size_t) rows);
             std::printf("  v2    vs FP32 reference: rel RMS %.3e  worst row max rel %.3e\n", e2.rms, e2.worst);
             std::printf("  v2    vs fused         : rel RMS %.3e  worst row max rel %.3e\n", e21.rms, e21.worst);
+            std::printf("  v2 vs CPU: max abs %.6g relative %.6g; vs MMQ: max abs %.6g relative %.6g (relative floor 1e-6)\n",
+                        e2.max_abs, e2.max_rel, e2m.max_abs, e2m.max_rel);
             double z2 = 0;
             for (int k = 0; k < K; ++k)
                 for (int o = 0; o < N; ++o)
@@ -419,6 +425,33 @@ void reference_part(const Pair& p, cudaStream_t s) {
                 throw std::runtime_error(std::string(p.name) + ": v2's error is not comparable to MMQ's");
             if (e21.rms > 0.1 * ef.rms)
                 throw std::runtime_error(std::string(p.name) + ": v2 and the fused kernels disagree");
+            if (p.gu == GGML_TYPE_IQ4_XS || p.d == GGML_TYPE_Q5_0) {
+                fused::native_v2_override(1);
+                constexpr int WT = 2 * T + 1;
+                std::vector<float> wx((size_t) WT * N);
+                std::vector<int32_t> wi((size_t) WT * K);
+                for (int t = 0; t < WT; ++t) {
+                    const int old = (17 * t) % T;
+                    std::copy_n(x.data() + (size_t) old * N, N, wx.data() + (size_t) t * N);
+                    std::copy_n(ids.data() + (size_t) old * K, K, wi.data() + (size_t) t * K);
+                }
+                Dev wide_x(wx.size() * 4);
+                FusedBufs wide(WT, (int64_t) WT * K, E);
+                ck(cudaMemcpyAsync(wide_x.p, wx.data(), wx.size() * 4, cudaMemcpyHostToDevice, s), "wide input");
+                ck(cudaMemcpyAsync(wide.ids.p, wi.data(), wi.size() * 4, cudaMemcpyHostToDevice, s), "wide routing");
+                run_fused(p, geo, wide, wide_x.as<float>(), WT, E, {0, E}, blob, s);
+                ck(cudaStreamSynchronize(s), "wide sync");
+                const auto wy = download(wide.dm, (size_t) WT * K * N);
+                const auto ws = download_i(wide.slot, (size_t) WT * K);
+                for (int t = 0; t < WT; ++t) for (int k = 0; k < K; ++k) {
+                    const int64_t old = (int64_t) ((17 * t) % T) * K + k;
+                    if (std::memcmp(wy.data() + (int64_t) ws[(size_t) t * K + k] * N,
+                                    y_2.data() + (int64_t) slot2[old] * N, N * sizeof(float)))
+                        throw std::runtime_error(std::string(p.name) + ": output depends on batch width or token position");
+                }
+                std::printf("  v2 batch width / token position: bitwise PASS (%d -> %d tokens)\n", T, WT);
+                fused::native_v2_override(0);
+            }
         }
         fused::native_v2_override(0);
     }
@@ -581,7 +614,7 @@ void timing_part(const Pair& p, int T, cudaStream_t s) {
             throw std::runtime_error(std::string(p.name) + ": the fused path's error is not comparable to MMQ's (timing)");
     }
     // v2 at the real shape: timed back to back, and against the fused kernels' outputs above
-    if (p.gu == GGML_TYPE_IQ3_XXS || p.d == GGML_TYPE_IQ4_NL) {
+    if (p.gu == GGML_TYPE_IQ3_XXS || p.gu == GGML_TYPE_IQ4_XS || p.d == GGML_TYPE_IQ4_NL || p.d == GGML_TYPE_Q5_0) {
         fused::native_v2_override(1);
         if (fused::native_v2_ready()) {
             for (float spent = 0; spent < 300.0f;) spent += once(fused_run);
@@ -609,6 +642,9 @@ void timing_part(const Pair& p, int T, cudaStream_t s) {
 
 int main(int argc, char** argv) {
     try {
+        if (fused::native_supported(GGML_TYPE_IQ4_XS, GGML_TYPE_Q5_0))
+            throw std::runtime_error("diagnostic Q5_0 path enabled by default");
+        fused::native_next_override(true);
         int n = 0;
         if (cudaGetDeviceCount(&n) != cudaSuccess || n == 0) { std::printf("no CUDA device: skipped\n"); return 77; }
         if (!fused::available()) { std::printf("the fused kernels need int8 tensor cores: skipped\n"); return 77; }
@@ -617,7 +653,9 @@ int main(int argc, char** argv) {
             {GGML_TYPE_IQ2_S, GGML_TYPE_Q2_0, "IQ2_S / Q2_0"},       {GGML_TYPE_IQ2_XXS, GGML_TYPE_Q2_0, "IQ2_XXS / Q2_0"},
             {GGML_TYPE_IQ2_XS, GGML_TYPE_IQ4_NL, "IQ2_XS / IQ4_NL"}, {GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ4_NL, "IQ3_XXS / IQ4_NL"},
             {GGML_TYPE_IQ3_S, GGML_TYPE_IQ4_NL, "IQ3_S / IQ4_NL"},   {GGML_TYPE_IQ4_XS, GGML_TYPE_Q2_0, "IQ4_XS / Q2_0"},
-            {GGML_TYPE_IQ2_S, GGML_TYPE_Q2_0, "IQ2_S+IQ2_XXS / Q2_0", GGML_TYPE_IQ2_XXS}};
+            {GGML_TYPE_IQ2_S, GGML_TYPE_Q2_0, "IQ2_S+IQ2_XXS / Q2_0", GGML_TYPE_IQ2_XXS},
+            {GGML_TYPE_IQ3_XXS, GGML_TYPE_Q5_0, "IQ3_XXS / Q5_0"},
+            {GGML_TYPE_IQ4_XS, GGML_TYPE_Q5_0, "IQ4_XS / Q5_0"}};
         const char* only = nullptr;   // --only=NAME: the pairs whose name contains NAME
         for (int i = 1; i < argc; ++i)
             if (std::strncmp(argv[i], "--only=", 7) == 0) only = argv[i] + 7;
@@ -645,7 +683,7 @@ int main(int argc, char** argv) {
         }
         if (timing) {
             // the IQ2_XS pack's layers (34 of 48 IQ2_S / Q2_0, 11 IQ2_XXS / Q2_0), the IQ3_S pack's most common, IQ3_XXS's
-            for (const Pair& p : {pairs[0], pairs[1], pairs[4], pairs[3]}) {
+            for (const Pair& p : {pairs[0], pairs[1], pairs[4], pairs[3], pairs[7], pairs[8]}) {
                 if (only && std::string(p.name).find(only) == std::string::npos) continue;
                 for (int T : chunks) timing_part(p, T, s);
             }

@@ -89,8 +89,9 @@ void run(ggml_type gu, ggml_type down) {
 }
 }
 int main() {
+    f::native_next_override(true);
     int count=0; if(cudaGetDeviceCount(&count)!=cudaSuccess || count<2) return 77;
-    try { run(GGML_TYPE_IQ4_XS,GGML_TYPE_IQ4_NL); run(GGML_TYPE_IQ3_XXS,GGML_TYPE_IQ4_NL); run(GGML_TYPE_IQ2_S,GGML_TYPE_IQ4_NL); }
+    try { run(GGML_TYPE_IQ4_XS,GGML_TYPE_IQ4_NL); run(GGML_TYPE_IQ3_XXS,GGML_TYPE_IQ4_NL); run(GGML_TYPE_IQ2_S,GGML_TYPE_IQ4_NL); run(GGML_TYPE_IQ4_XS,GGML_TYPE_Q5_0); run(GGML_TYPE_IQ3_XXS,GGML_TYPE_Q5_0); }
     catch(const std::exception&e){std::fprintf(stderr,"prefill_fused_peer_test: %s\n",e.what());return 1;}
     std::puts("prefill_fused_peer_test: PASS");
 }

@@ -1,6 +1,7 @@
 #include "basalt/models/qwen4exp/shared_names.hpp"
 #include "context.hpp"
 #include "basalt/models/qwen4exp/prefill/fused_peer.hpp"
+#include "basalt/models/qwen4exp/prefill/policy.hpp"
 
 namespace basalt::models::qwen4exp::generate {
 
@@ -160,7 +161,7 @@ int resident_plan(Context& context) {
         bool ok = true;
         if (o.serve && o.prefill_peer_large && !o.no_peer_prefill && o.peer_device >= 1 && chunk_max > 0)
             ok = basalt::core::host_plan(basalt::prefill::FusedPeer::host_bytes(
-                std::min(chunk_max, basalt::prefill::kFusedPeerChunkLimit)));
+                std::min(chunk_max, basalt::prefill::cutoffs().large_capacity())));
         if (ok && o.serve && chunk_max > 0) {
             for (int b = 0; ok && b < 2; ++b) ok = basalt::core::host_plan((size_t) chunk_max * (size_t) g.n_embd * sizeof(float));
             for (size_t i = 0; ok && i < stages.size(); ++i)   // the main card and every stage but the last hand rows on

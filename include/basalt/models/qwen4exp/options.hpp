@@ -65,6 +65,9 @@ struct Options : CommonOptions {
     bool no_peer_prefill = false;
     int prefill_peer_large = 0;  // diagnostic: 0 off, 1 compute, 2 reserve-only
     int prefill_peer_extra = 0;  // diagnostic: 0 off, 1 compute, 2 reserve-only
+    std::string diag_prefill_cutoffs;  // diagnostic: fixed-reservation cutoff comparison
+    bool diag_prefill_long = false;  // diagnostic: exercise long-prefill arithmetic in the quality gate
+    bool prefill_native_next = false;  // diagnostic: opt in to the next native prefill kernels
     /// --serve (opt-in): where to save what the adaptive tier learned, as a profile (the resident experts first,
     /// then the routing counted since the start; the format of data/profiles); on QUIT and every
     /// `expert_profile_save_min` minutes between requests.  Empty (the default): nothing is counted or written.

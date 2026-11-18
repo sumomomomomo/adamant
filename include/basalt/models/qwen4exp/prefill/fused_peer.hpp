@@ -8,8 +8,6 @@
 
 namespace basalt::prefill {
 
-inline constexpr int64_t kFusedPeerChunkLimit = 4096;
-
 // Copies the primary's quantized inputs and row map, computes disjoint expert
 // ranges, and returns their unchanged rows for the primary's ordinary combine.
 class FusedPeer {

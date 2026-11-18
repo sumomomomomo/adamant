@@ -127,19 +127,19 @@ struct Prefill::Run::Chunk {
     const basalt::kernels::cpu::ExpertLayout& lay0 = basalt::kernels::cpu::expert_layout();
     const bool stream_all = m.ring > STAGE && T >= stream_all_min() && m.src != nullptr;
     // the peer takes the rows of a chunk only up to its buffers' size (the routed-only chunks)
-    PeerPrefill* const ppc = m.pp && m.peer_share && T <= m.pp->T_max ? m.pp.get() : nullptr;
+    PeerPrefill* const ppc = m.pp && m.peer_share && !stream_all && T <= m.pp->T_max ? m.pp.get() : nullptr;
     const std::vector<PeerPrefill*> ppcs = [this] {
         std::vector<PeerPrefill*> peers;
         if (ppc) peers.push_back(ppc);
         if (m.peer_share && m.extra_peer_compute && !stream_all &&
-            T >= kExtraPeerMinTokens && T <= kExtraPeerChunkLimit)
+            T >= kExtraPeerMinTokens && T <= cutoffs().extra_max)
             for (auto& peer : m.extra_pp)
                 if (T <= peer->T_max) peers.push_back(peer.get());
         return peers;
     }();
     bool large_peer_reported = false;
     bool large_peer_layer(int64_t l) const {
-        if (T > kFusedPeerChunkLimit || !stream_all || !m.peer_share || !m.large_peer_compute || !m.large_peer ||
+        if (T > cutoffs().large_max || !stream_all || !m.peer_share || !m.large_peer_compute || !m.large_peer ||
             !m.pp || !lay0.native || !mmq_plan().layer[(size_t) l]) return false;
         const auto& f = lay0.fmt[(size_t) l];
         return fused::native_supported(f.gu_type, f.d_type, f.up_type);

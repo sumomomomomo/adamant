@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common.hpp"
+#include "basalt/models/qwen4exp/prefill/policy.hpp"
 #include "layout.hpp"
 #include "basalt/models/qwen4exp/prefill/prefill.hpp"
 #include "basalt/models/qwen4exp/decode/mtp.hpp"
@@ -24,7 +25,6 @@
 namespace basalt::prefill {
 using namespace detail;
 inline constexpr int64_t kExtraPeerMinTokens = 128;
-inline constexpr int64_t kExtraPeerChunkLimit = 2048;
 
 // multi-GPU: the peer GPU's share of a prompt chunk's experts, on the shared transport (prefill::PeerShare).  Per MoE
 // layer the peer computes the rows routed to the experts it holds, with the products the primary would run on them (MMQ

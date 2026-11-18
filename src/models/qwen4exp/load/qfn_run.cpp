@@ -1,5 +1,7 @@
 // The whole start of a Flash-Next engine, in order: its stack frames hold the resources while the server runs.
 #include "basalt/core/shipped_profiles.hpp"
+#include "basalt/models/qwen4exp/prefill/moe_fused_iq.hpp"
+#include "basalt/models/qwen4exp/prefill/policy.hpp"
 #include "basalt/models/qwen4exp/shared_names.hpp"
 #include "basalt/platform/file.hpp"
 #include "context.hpp"
@@ -9,6 +11,7 @@
 namespace basalt::models::qwen4exp {
 
 int run_engine(Options& o, std::vector<program::GpuCard>& chosen_cards) {
+    basalt::prefill::fused::native_next_override(o.prefill_native_next);
     using namespace basalt::models::qwen4exp::generate;
     Context context;
     std::string& ppl_base = o.ppl_base;
@@ -89,24 +92,43 @@ int run_engine(Options& o, std::vector<program::GpuCard>& chosen_cards) {
     // chunk more than the experts it saves the main card's link, so it keeps to the short chunks it helps
     const bool peer_streamed_share = chosen_cards.size() >= 2 && basalt::program::cards_alike(chosen_cards[0], chosen_cards[1]);
     // the prompt-time layer split over the expert tier cards (PromptStage), and the most stages it may use, the main
-    // card's included: every card on two cards or on three or more alike ones, none on three or more unlike cards
-    // until measured on such a set.  With --batch a read splits only while no slot decodes.
+    // card's included. A matching first pair can split while an additional tier keeps its experts.
+    // With --batch a read splits only while no slot decodes.
     bool split_want = o.serve && o.peer_device >= 1;
     bool split_alike = true;
     for (size_t i = 1; i < chosen_cards.size(); ++i)
         split_alike = split_alike && basalt::program::cards_alike(chosen_cards[0], chosen_cards[i]);
-    const int split_cap = o.peer_devices.size() <= 1 ? 2 : split_alike ? (int) o.peer_devices.size() + 1 : 1;
+    const int split_cap = basalt::prefill::prompt_stage_limit((int) o.peer_devices.size(), split_alike,
+                                                            o.prefill_native_next, peer_streamed_share);
     basalt::core::PeerExperts::set_min_scratch((size_t) basalt::kernels::moe_hit_grouped_scratch_bytes(basalt::kernels::cpu::MAXT * 10, basalt::kernels::cpu::H, basalt::kernels::cpu::FF));
     basalt::core::set_peer_portable(o.peer_device >= 1 || !o.layer_split.empty());   // multi-GPU: the Portable flag on mapped host buffers only with a peer device (before any allocation)
     // Chunks below this take the routed-only path with the peer card computing its experts' rows; from it on
     // every expert streams through the ring.  The routed-only path costs ~0.3 ms per token, streaming ~0.12 ms
     // plus the time to move the experts the primary lacks over its link; with --peer-exclusive that includes the
     // peer-only experts, staged through the host, so streaming loses until later.
+    basalt::prefill::Cutoffs diagnostic_cutoffs;
+    if (!o.diag_prefill_cutoffs.empty() &&
+        !basalt::prefill::parse_cutoffs(o.diag_prefill_cutoffs, diagnostic_cutoffs))
+        return fatal_start_error("--diag-prefill-cutoffs needs STREAM,EXTRA,LARGE within 128..8192 (EXTRA <= 6144 and < STREAM)");
     auto set_stream_all_min = [&]() {
+        basalt::prefill::cutoffs() = !o.diag_prefill_cutoffs.empty() ? diagnostic_cutoffs :
+            basalt::prefill::serving_cutoffs(
+                o.serve && o.batch == 0 && o.layer_split.empty() && o.prefill_native_next,
+                o.prefill_peer_extra == 1, (int) o.peer_devices.size(), peer_streamed_share, o.peer_exclusive);
+        if (o.diag_prefill_long) {
+            basalt::prefill::Prefill::set_stream_all_min(128);
+            return;
+        }
+        if (basalt::prefill::cutoffs().stream_min > 0) {
+            basalt::prefill::Prefill::set_stream_all_min(basalt::prefill::cutoffs().stream_min);
+            return;
+        }
         if (o.serve && o.peer_device >= 1 && !o.no_peer_prefill && peer_streamed_share)
             basalt::prefill::Prefill::set_stream_all_min(o.peer_exclusive ? 4096 : 2560);
     };
     set_stream_all_min();
+    if (o.diag_prefill_long && o.ppl_base.empty())
+        return fatal_start_error("--diag-prefill-long requires --ppl-base");
     if (o.prefill_peer_large < 0 || o.prefill_peer_large > 2) return fatal_start_error("--prefill-peer-large needs 0, 1 or 2");
     if (o.prefill_peer_large && (!o.serve || o.batch > 0 || !o.layer_split.empty() || o.no_peer_prefill || o.peer_device < 1))
         return fatal_start_error("--prefill-peer-large requires single-slot serving with an expert peer and peer prefill");

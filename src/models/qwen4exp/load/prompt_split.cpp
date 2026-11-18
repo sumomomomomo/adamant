@@ -1,4 +1,6 @@
 #include "basalt/models/qwen4exp/shared_names.hpp"
+#include "basalt/models/qwen4exp/prefill/stage_weights.hpp"
+#include "basalt/models/qwen4exp/prefill/policy.hpp"
 #include "context.hpp"
 
 namespace basalt::models::qwen4exp::generate {
@@ -161,9 +163,12 @@ int prompt_split(Context& context) {
     int64_t split_hand_rows = 0;   // the rows each hand-off buffer holds (0 before they exist: a chunk's)
     int64_t split_chunk_cap = 0;   // the longest chunk every stage can hold (0 before they are laid out: no limit)
     int64_t split_peer_rows = 0;   // the longest routed-only chunk a slower tier card computes its experts' rows of
+    const int paired_floor = basalt::prefill::paired_stage_layer_floor(o.prefill_native_next,
+        (int) o.peer_devices.size(), split_cap, peer_streamed_share, (int) g.n_layers, (int) g.n_embd);
     auto split_price = [&](int64_t a0, int64_t b0, int64_t prompt_end, int max_stages) -> engine_local::SplitPricing {
         engine_local::SplitPricing sp0;
         const int64_t n_tok = b0 - a0;
+        if (paired_floor > 0 && split_chunk_cap > 0 && n_tok <= 2 * read_cap()) return sp0;
         // two chunks or more, the draft layer's window within the last two the main card hands on (their final rows
         // come back for it in the hand-off buffers)
         const auto [chunk, head] = serve_loans::one_card_chunks(n_tok, read_cap(), true, o.prefill_auto_fit);
@@ -220,6 +225,7 @@ int prompt_split(Context& context) {
             basalt::program::PsCard c = split_peer_side(*st, region);
             c.setup_ms = st->link_gbps > 0 ? (double) st->image_bytes / (0.85 * st->link_gbps * 1e9) * 1000.0 + 10.0 : 0.0;
             c.layer_lo = (int) st->lo;
+            if (paired_floor > 0 && split_chunk_cap > 0) c.layer_lo = std::max(c.layer_lo, paired_floor);
             c.layer_hi = (int) st->hi;
             peers.push_back(std::move(c));
         }
@@ -351,6 +357,7 @@ int prompt_split(Context& context) {
             basalt::core::NativeDense::set_layer_range(-1, -1);
         }
         ok = ok && cudaDeviceSynchronize() == cudaSuccess &&   // (the uploads ran on their own streams)
+             mirror_prompt_hc8(*context.wt, st.wt, st.dev, err) &&
              basalt::core::host_alloc((void**) &st.image, st.image_bytes, cudaHostAllocPortable) == cudaSuccess &&
              cudaMemcpy(st.image, w_at, st.image_bytes, cudaMemcpyDeviceToHost) == cudaSuccess;
         std::string ge;

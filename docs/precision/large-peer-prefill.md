@@ -8,6 +8,9 @@ chunks retain ordinary primary-GPU expert computation. It is off by default.
 Attention, routing, the shared expert, HC writes, vision and DFlash2 remain on the primary. Further expert tiers
 retain their existing roles.
 
+With native-next and two computing expert tiers, the [experimental three-GPU
+cutoffs](peer-prefill-cutoffs.md) select the routed path for medium chunks.
+
 ## Execution
 
 The native fused path sends already quantized activations and the exact primary
@@ -49,8 +52,9 @@ arithmetic kernels are unchanged; their CPU-reference tests remain applicable.
 
 ## Full-model development checks
 
-On the mixed UD-IQ4_XS pack, 13 of 48 expert layers have fused format coverage.
-The other 35 layers retain the ordinary large-chunk MMQ path on the primary.
+The original measurements below covered 13 of 48 expert layers on the mixed
+UD-IQ4_XS pack; the other 35 used ordinary large-chunk MMQ on the primary.
+The opt-in [long-prefill experiment](long-prefill.md) also covers their Q5_0 down projections.
 Extending the old MMQ peer grouping did not preserve greedy identity in an
 exploratory check, so that change is excluded from this prototype.
 

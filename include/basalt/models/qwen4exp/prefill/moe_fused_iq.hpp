@@ -9,7 +9,7 @@
 // int8 per 32 values in their natural order here (quantize_act_native), not the Q2_0 path's permuted one.
 //
 // Covered: gate/up IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S, IQ4_XS; down Q2_0, IQ4_NL - every layer of the IQ2_XS,
-// IQ3_XXS and IQ3_S packs but the IQ1_M ones (which MMQ does not cover either).  Other layers keep MMQ.
+// IQ3_XXS and IQ3_S packs but the IQ1_M ones (which MMQ does not cover either). Q5_0 down is diagnostic-only.
 #pragma once
 
 #include "basalt/models/qwen4exp/prefill/moe_fused.hpp"
@@ -31,6 +31,9 @@ struct NativeGeom {
 /// enabled() (int8 MMA), and the kernels cover this gate/up and down pair on this device (`up_type`: the up rows'
 /// type, -1 for gu_type's; a mix is covered for the pairs the kernels are built for).
 bool native_supported(int gu_type, int d_type, int up_type = -1);
+/// Diagnostic opt-in to Q5_0 down and v2 IQ4_XS gate/up. Set before planning or launching any prompt work.
+void native_next_override(bool enabled);
+bool native_next_enabled();
 
 /// x [rows][cols] FP32 -> `xa` (act_bytes(rows, cols)): int8 per 32 values in natural order, the native kernels' form.
 void quantize_act_native(const float* x, int64_t rows, int64_t cols, void* xa, void* stream);
@@ -41,7 +44,7 @@ void quantize_act_native(const float* x, int64_t rows, int64_t cols, void* xa, v
 void experts_native(const Batch& b, const NativeGeom& g, int n_expert, int64_t n, const void* scratch, const void* xa,
                     const int32_t* src, void* ha, float* dm, void* stream);
 
-/// experts_native() runs IQ3_XXS gate/up and IQ4_NL down on the v2 kernels
+/// experts_native() runs IQ3_XXS / IQ4_XS gate/up and IQ4_NL / Q5_0 down on the v2 kernels
 /// (raw weight bytes by cp.async, decoded straight into the mma fragments, a work item over up to 128 routed rows);
 /// the other formats keep the kernels above.  Same math, rounded in another order.
 /// Tests: native_v2_override(1 / 0) forces v2 on / off, -1 returns to the variable.

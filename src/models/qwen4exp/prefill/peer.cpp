@@ -67,7 +67,7 @@ static bool make_peer(core::PeerExperts* peer, int64_t T_max, std::unique_ptr<Pe
                       std::string& err, bool optional = false) {
     auto pp = std::make_unique<PeerPrefill>();
     pp->peer = peer;
-    pp->T_max = std::min<int64_t>(T_max, stream_all_min() - 1);
+    pp->T_max = std::min<int64_t>(T_max, cutoffs().routed_capacity(stream_all_min()));
     pp->G = pp->T_max;   // one expert never has more rows than the chunk has tokens
     const int64_t Tp = pp->T_max;   // the longest chunk the peer takes
     pp->cap_rows = Tp * K;
@@ -116,11 +116,11 @@ static bool make_peer(core::PeerExperts* peer, int64_t T_max, std::unique_ptr<Pe
 uint64_t Prefill::peer_bytes(int64_t chunk, bool streamed_share) {
     if (!mmq_plan().any) return 0;
     PeerPrefill pp;
-    pp.T_max = std::min<int64_t>(chunk, streamed_share ? stream_all_min() - 1 : kPeerSlowRows);
+    pp.T_max = std::min<int64_t>(chunk, streamed_share ? cutoffs().routed_capacity(stream_all_min()) : kPeerSlowRows);
     pp.G = pp.T_max;
     return PeerShare::peer_bytes(share_dims(pp.T_max, pp.G, mmq_plan())) +
-           (large_peer_mode > 0 && chunk >= stream_all_min() ?
-                FusedPeer::device_bytes(std::min(chunk, kFusedPeerChunkLimit)) : 0);
+           (large_peer_mode > 0 && chunk >= stream_all_min() && cutoffs().reserve_large(stream_all_min()) ?
+                FusedPeer::device_bytes(std::min(chunk, cutoffs().large_capacity())) : 0);
 }
 
 void Prefill::set_extra_peers(const std::vector<core::PeerExperts*>& peers, bool compute) {
@@ -131,7 +131,7 @@ void Prefill::set_extra_peers(const std::vector<core::PeerExperts*>& peers, bool
         if (peer == nullptr || !peer->valid()) continue;
         std::unique_ptr<PeerPrefill> pp;
         std::string err;
-        if (!make_peer(peer, std::min(m.T_max, kExtraPeerChunkLimit), pp, err, true)) {
+        if (!make_peer(peer, std::min(m.T_max, cutoffs().extra_capacity()), pp, err, true)) {
             basalt::log::warn("basalt prefill", "GPU %d: %s; additional peer disabled", peer->device(), err.c_str());
             continue;
         }
@@ -151,8 +151,8 @@ bool Prefill::set_peer(core::PeerExperts* peer, bool streamed_share, std::string
     bool ok = make_peer(peer, t_routed, pp, err);
     if (!ok) return false;
     m.pp = std::move(pp);
-    if (large_peer_mode > 0 && m.T_max >= stream_all_min()) {
-        const int64_t capacity = std::min(m.T_max, kFusedPeerChunkLimit);
+    if (large_peer_mode > 0 && m.T_max >= stream_all_min() && cutoffs().reserve_large(stream_all_min())) {
+        const int64_t capacity = std::min(m.T_max, cutoffs().large_capacity());
         m.large_peer_compute = large_peer_mode == 1;
         m.large_peer = std::make_unique<FusedPeer>();
         if (!m.large_peer->open(m.device, peer->device(), capacity, (int) m.g->n_expert, err)) {

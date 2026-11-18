@@ -7,6 +7,10 @@ GPU and the first expert peer. Validation covers the mixed UD-IQ4_XS pack with
 expert ablation enabled, the full Q8_0 PLE table, int8 KV and DFlash2 on Linux
 with RTX 3090 Ti / RTX 3090 / RTX 3080 20 GB cards.
 
+With native-next and two computing expert tiers, the [experimental three-GPU
+cutoffs](peer-prefill-cutoffs.md) extend this routed range. The limits below
+describe the ordinary additional-peer path.
+
 ## Dispatch and memory
 
 The additional tier is enabled explicitly by the serving configuration; it is

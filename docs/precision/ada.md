@@ -28,6 +28,7 @@ Ampere is not yet validated. The sm_86 build compiles; still open on Ampere hard
 | Operation | Adamant implementation | Numerical consequence requiring validation |
 |---|---|---|
 | MMQ prompt experts | Existing integer MMA tiles, without programmatic dependent launch; all configured formats retained | No arithmetic or tile-selection changes intended. Cross-device equality is not assumed. |
+| Diagnostic native long-prefill experts | Fused Q5_0 down projections and v2 IQ4_XS gate/up, with deeper staging for large chunks | Numerical changes and the measured Ampere validation are recorded in [long prefill](long-prefill.md). |
 | NVFP4 prompt experts | Integer MMQ at all prompt sizes, not native FP4 tensor instructions | Activations use MMQ's q8_1 rounding instead of E2M1/UE4M3 rounding for long prompts. This changes numerics relative to upstream's native FP4 path. Weight bytes remain in the same format. |
 | Dense tensor-core projections and QSA middle | Local async-copy staging and supported integer MMA instructions | Must compare scale application and reduction order to the reference and test token-width invariance. |
 | Fused hyper-connection read | Cooperative async copies replace tensor-map transfers; hc8 storage and the unfused implementation remain | Copy/layout equivalence and unchanged arithmetic are design intentions, not measured bitwise identity. Selecting this read instead of the unfused read can change numerics. |

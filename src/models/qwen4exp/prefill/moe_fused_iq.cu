@@ -78,15 +78,16 @@ constexpr int GU_ROWS_K = 2560, D_ROWS_K = 640;   // K of gate/up (n_embd) and o
 // the formats (ggml type ids)
 constexpr int T_IQ2_XXS = GGML_TYPE_IQ2_XXS, T_IQ2_XS = GGML_TYPE_IQ2_XS, T_IQ2_S = GGML_TYPE_IQ2_S,
               T_IQ3_XXS = GGML_TYPE_IQ3_XXS, T_IQ3_S = GGML_TYPE_IQ3_S, T_IQ4_XS = GGML_TYPE_IQ4_XS,
-              T_IQ4_NL = GGML_TYPE_IQ4_NL, T_Q2_0 = GGML_TYPE_Q2_0;
+              T_IQ4_NL = GGML_TYPE_IQ4_NL, T_Q2_0 = GGML_TYPE_Q2_0, T_Q5_0 = GGML_TYPE_Q5_0;
 static_assert(sizeof(block_iq2_xxs) == 66 && sizeof(block_iq2_xs) == 74 && sizeof(block_iq2_s) == 82 &&
               sizeof(block_iq3_xxs) == 98 && sizeof(block_iq3_s) == 110 && sizeof(block_iq4_xs) == 136 &&
-              sizeof(block_iq4_nl) == 18 && sizeof(block_q2_0) == 18, "the block layouts this file decodes");
+              sizeof(block_iq4_nl) == 18 && sizeof(block_q2_0) == 18 && sizeof(block_q5_0) == 22,
+              "the block layouts this file decodes");
 
 // block bytes, scale per 16 values, codebook bytes in shared memory
 __host__ __device__ constexpr int block_bytes(int t) {
     return t == T_IQ2_XXS ? 66 : t == T_IQ2_XS ? 74 : t == T_IQ2_S ? 82 : t == T_IQ3_XXS ? 98 : t == T_IQ3_S ? 110
-         : t == T_IQ4_XS ? 136 : 18;
+         : t == T_IQ4_XS ? 136 : t == T_Q5_0 ? 22 : 18;
 }
 __host__ __device__ constexpr bool per16(int t) { return t == T_IQ2_XS || t == T_IQ2_S; }
 __host__ __device__ constexpr int grid_bytes(int t) {
@@ -191,7 +192,7 @@ __device__ __forceinline__ void table16(uint32_t q4, const uint32_t (&t)[4], uin
 
 // Raw bytes of sub-block `ib` of the block at `bp` (IQ: the 256-value super-block, ib 0..7; Q2_0: the 64-value block,
 // ib 0..1; IQ4_NL: the 32-value block).
-template <int T> __device__ __forceinline__ void load_unit(const uint8_t* bp, int ib, uint32_t (&w)[5]) {
+template <int T> __device__ __forceinline__ void load_unit(const uint8_t* bp, int ib, uint32_t (&w)[6]) {
     if constexpr (T == T_IQ2_XXS) {
         w[0] = ld32(bp + 2 + 8 * ib); w[1] = ld32(bp + 6 + 8 * ib); w[2] = ld16(bp);
     } else if constexpr (T == T_IQ2_XS) {
@@ -213,6 +214,11 @@ template <int T> __device__ __forceinline__ void load_unit(const uint8_t* bp, in
 #pragma unroll
         for (int k = 0; k < 4; ++k) w[k] = ld32(bp + 2 + 4 * k);
         w[4] = ld16(bp);
+    } else if constexpr (T == T_Q5_0) {
+#pragma unroll
+        for (int k = 0; k < 4; ++k) w[k] = ld32(bp + 6 + 4 * k);
+        w[4] = ld32(bp + 2);
+        w[5] = ld16(bp);
     } else {   // Q2_0
         w[0] = ld32(bp + 2 + 8 * ib); w[1] = ld32(bp + 6 + 8 * ib); w[2] = ld16(bp);
     }
@@ -220,7 +226,7 @@ template <int T> __device__ __forceinline__ void load_unit(const uint8_t* bp, in
 
 // The sub-block as 32 int8 (q[0..7], natural order) and its scales (s0: values 0-15, s1: 16-31).
 template <int T>
-__device__ __forceinline__ void convert(const uint32_t (&w)[5], const uint8_t* grid, const uint32_t (&kv)[4],
+__device__ __forceinline__ void convert(const uint32_t (&w)[6], const uint8_t* grid, const uint32_t (&kv)[4],
                                         uint32_t (&q)[8], float& s0, float& s1) {
     if constexpr (T == T_IQ2_XXS) {
         const uint2* g = (const uint2*) grid;
@@ -276,6 +282,15 @@ __device__ __forceinline__ void convert(const uint32_t (&w)[5], const uint8_t* g
 #pragma unroll
         for (int k = 0; k < 4; ++k) table16(w[k], kv, q[k], q[4 + k]);
         s0 = s1 = T == T_IQ4_XS ? half_at(w[4]) * (float) ((int) (w[4] >> 16) - 32) : half_at(w[4]);
+    } else if constexpr (T == T_Q5_0) {
+#pragma unroll
+        for (int k = 0; k < 4; ++k) {
+            const uint32_t low = (((w[4] >> (4 * k)) & 15u) * 0x00204081u) & 0x01010101u;
+            const uint32_t high = (((w[4] >> (16 + 4 * k)) & 15u) * 0x00204081u) & 0x01010101u;
+            q[k] = __vsub4((w[k] & 0x0f0f0f0fu) | (low << 4), 0x10101010u);
+            q[k + 4] = __vsub4(((w[k] >> 4) & 0x0f0f0f0fu) | (high << 4), 0x10101010u);
+        }
+        s0 = s1 = half_at(w[5]);
     } else {   // Q2_0: code - 1 via a byte table {-1, 0, 1, 2}
 #pragma unroll
         for (int h = 0; h < 4; ++h) {
@@ -333,6 +348,23 @@ __device__ __forceinline__ void dec_iq4nl(const uint8_t* sm, uint32_t bo, uint32
                                           uint32_t& lo, uint32_t& hi, float& dw) {
     table16(lds32_2a(sm, bo + 2 + 4 * t), kv, lo, hi);
     dw = half_at(lds16(sm, bo));
+}
+__device__ __forceinline__ void dec_q5_0(const uint8_t* sm, uint32_t bo, uint32_t t,
+                                       uint32_t& lo, uint32_t& hi, float& dw) {
+    const uint32_t qs = lds32_2a(sm, bo + 6 + 4 * t), qh = lds32_2a(sm, bo + 2);
+    const uint32_t low = (((qh >> (4 * t)) & 15u) * 0x00204081u) & 0x01010101u;
+    const uint32_t high = (((qh >> (16 + 4 * t)) & 15u) * 0x00204081u) & 0x01010101u;
+    lo = __vsub4((qs & 0x0f0f0f0fu) | (low << 4), 0x10101010u);
+    hi = __vsub4(((qs >> 4) & 0x0f0f0f0fu) | (high << 4), 0x10101010u);
+    dw = half_at(lds16(sm, bo));
+}
+__device__ __forceinline__ void dec_iq4xs(const uint8_t* sm, uint32_t raw, int ib, int j, uint32_t t,
+                                        const uint32_t (&kv)[4], uint32_t& lo, uint32_t& hi, float& dw) {
+    const uint32_t meta = (raw & ~15u) + 96;
+    const uint32_t high = lds16(sm, meta + 2), low = lds32_2a(sm, meta + 4);
+    const int scale = (int)(((low >> (4 * ib)) & 15u) | (((high >> (2 * ib)) & 3u) << 4)) - 32;
+    dw = half_at(lds16(sm, meta)) * (float)scale;
+    table16(lds32_2a(sm, raw + 16 * j + 4 * t), kv, lo, hi);
 }
 #endif
 
@@ -406,7 +438,7 @@ native_kernel(const Batch b, const NativeGeom geo, const Tables tb, const uint8_
                                  : blob + geo.down_off + (size_t) (rbase + ur) * geo.d_row;
         auto unit = [&](int s) -> const uint8_t* {                  // the block of stage s's sub-block
             if (GU) return wrow + (s >> 2) * bs;
-            return WT == T_IQ4_NL ? wrow + (2 * s + uj) * BS : wrow + s * BS;
+            return WT == T_IQ4_NL || WT == T_Q5_0 ? wrow + (2 * s + uj) * BS : wrow + s * BS;
         };
         auto sub = [&](int s) { return GU ? 2 * (s & 3) + uj : uj; };
         // the weight bytes into L2 ahead of the register loads (one stage ahead only - less than a DRAM round trip):
@@ -434,7 +466,7 @@ native_kernel(const Batch b, const NativeGeom geo, const Tables tb, const uint8_
                 if (r < nrows) cp16(st + r * AB + q * 16, act + (size_t) srow[r] * ACT_LD + s * AB + q * 16);
             }
         };
-        auto put = [&](const uint32_t (&raw)[5], int buf) {
+        auto put = [&](const uint32_t (&raw)[6], int buf) {
             if (!dec) return;
             uint32_t q[8];
             float s0, s1;
@@ -450,7 +482,7 @@ native_kernel(const Batch b, const NativeGeom geo, const Tables tb, const uint8_
             if (s < NS) load_act(s);
             cp_commit();
         }
-        uint32_t raw[5] = {0, 0, 0, 0, 0};
+        uint32_t raw[6] = {0, 0, 0, 0, 0, 0};
         auto load = [&](int s) {
             if (MIX && urow) load_unit<WU>(unit(s), sub(s), raw);
             else load_unit<WT>(unit(s), sub(s), raw);
@@ -587,11 +619,14 @@ constexpr int V2_CSTR = 144;                                // bytes per routed 
 constexpr int V2_ACT = V2_NR * V2_CSTR + 4 * V2_NR * 4;     // a chunk: codes [NR][CSTR], then d_x [4][NR]
 constexpr int V2_PF = 2;                                    // raw units into L2 ahead
 static_assert(V2_THREADS == V2_WR, "a thread per weight row for the L2 prefetches");
-template <bool GU> struct V2 {
+template <bool GU, int DT = T_IQ4_NL> struct V2 {
     static constexpr int K = GU ? GU_ROWS_K : D_ROWS_K;
     static constexpr int NC = K / 128;                      // chunks
-    static constexpr int RB = GU ? 98 : 72;                 // raw bytes of a row per unit
-    static constexpr int CPR = GU ? 2 : 1;                  // chunks per unit
+    static constexpr int RB = GU ? (DT == T_IQ4_XS ? 64 : 98) : DT == T_Q5_0 ? 88 : 72;
+    static constexpr int CPR = GU && DT != T_IQ4_XS ? 2 : 1;
+    __host__ __device__ static constexpr int raw_offset(int unit) {
+        return GU && DT == T_IQ4_XS ? (unit / 2) * 136 + 8 + (unit & 1) * 64 : unit * RB;
+    }
     static constexpr int NU = NC / CPR;
     // bytes per row of a raw buffer: >= 14 + RB (the offset within 16), a multiple of 16, 28 words (rows g = 0..7
     // of a decode load fall in distinct banks)
@@ -603,33 +638,33 @@ template <bool GU> struct V2 {
     static constexpr int RAWBUF = V2_WR * SLOT;
     static constexpr int OFF_SROW = OFF_RAW + 2 * RAWBUF;
     static constexpr int OFF_GRID = OFF_SROW + V2_NR * 4;
-    static constexpr int OFF_MISC = OFF_GRID + (GU ? 1024 : 0);
+    static constexpr int OFF_MISC = OFF_GRID + (GU && DT != T_IQ4_XS ? 1024 : 0);
     static constexpr int SMEM = OFF_MISC + 16;
     static_assert(SLOT >= 14 + RB && SLOT % 16 == 0 && NC % CPR == 0, "v2 layout");
     static_assert(V2_WR * NP % V2_THREADS == 0 && V2_NR * 12 % V2_THREADS == 0, "v2 copy loops");
     static_assert(8 * V2_NR * 4 <= V2_ACT, "the H scale exchange fits in a chunk stage");
 };
 
-// GU: IQ3_XXS gate/up against the tokens' activations, SwiGLU, H to int8 per 32 features into `out`.  !GU: IQ4_NL
-// down against H, FP32 into `dm`.  `ctr`: the launch's item counter, zero at the start.
-template <bool GU>
+// GU: gate/up against the tokens' activations, SwiGLU, H to int8 per 32 features into `out`.
+// !GU: down against H, FP32 into `dm`. `ctr`: the launch's item counter, zero at the start.
+template <bool GU, int DT = T_IQ4_NL>
 __global__ void __launch_bounds__(V2_THREADS, 1)
 v2_kernel(const Batch b, const NativeGeom geo, const Tables tb, const uint8_t* __restrict__ act,
           const int32_t* __restrict__ src, uint8_t* __restrict__ out, float* __restrict__ dm, int* __restrict__ ctr) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-    using C = V2<GU>;
+    using C = V2<GU, DT>;
     extern __shared__ __align__(16) uint8_t smem[];
     int* srow = (int*) (smem + C::OFF_SROW);                   // the activation row of each routed row
     int* misc = (int*) (smem + C::OFF_MISC);                   // [0] an item, [1] the next item
     [[maybe_unused]] const uint32_t* sgrid = (const uint32_t*) (smem + C::OFF_GRID);
     const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, g = lane >> 2;
     const uint32_t t = lane & 3;
-    if constexpr (GU) {
+    if constexpr (GU && DT != T_IQ4_XS) {
         const uint32_t* gs = (const uint32_t*) iq3xxs_grid;
         for (int i = tid; i < 256; i += V2_THREADS) ((uint32_t*) (smem + C::OFF_GRID))[i] = gs[i];
     }
     [[maybe_unused]] uint32_t kv[4] = {0, 0, 0, 0};
-    if constexpr (!GU) {
+    if constexpr ((!GU && DT == T_IQ4_NL) || (GU && DT == T_IQ4_XS)) {
 #pragma unroll
         for (int k = 0; k < 16; ++k) kv[k >> 2] |= (uint32_t) (uint8_t) kvalues_iq4nl[k] << (8 * (k & 3));
     }
@@ -644,8 +679,8 @@ v2_kernel(const Batch b, const NativeGeom geo, const Tables tb, const uint8_t* _
             return bl + geo.down_off + (size_t) (V2_WR * f + r) * geo.d_row;
     };
     auto prefetch_unit = [&](const uint8_t* p, int u) {   // a unit spans at most two lines
-        pf_l2(p + u * C::RB);
-        pf_l2(p + u * C::RB + C::RB - 1);
+        pf_l2(p + C::raw_offset(u));
+        pf_l2(p + C::raw_offset(u) + C::RB - 1);
     };
 
     if (tid == 0) misc[0] = atomicAdd(ctr, 1);
@@ -654,7 +689,7 @@ v2_kernel(const Batch b, const NativeGeom geo, const Tables tb, const uint8_t* _
     while (w < nwork) {
         const int2 tl = tb.tiles[t0 + w / C::NFB];
         const int fb = w % C::NFB, e = tl.x, row0 = tl.y;
-        if (((row0 - tb.off[e]) & (V2_NR - 1)) != 0) {         // the second tile of an item: the next one
+        if (((row0 - tb.off[e]) & (V2_NR - 1)) != 0) {
             __syncthreads();                                    // every thread has read misc[0]
             if (tid == 0) misc[0] = atomicAdd(ctr, 1);
             __syncthreads();
@@ -678,10 +713,15 @@ v2_kernel(const Batch b, const NativeGeom geo, const Tables tb, const uint8_t* _
 
         auto load_raw = [&](int u) {                            // unit u of every row into buffer u & 1
             const int dst = C::OFF_RAW + (u & 1) * C::RAWBUF;
+            if constexpr (GU && DT == T_IQ4_XS) {
+                const uint8_t* meta = row_ptr(blob, fb, tid) + (u / 2) * 136;
+                *(uint32_t*)(smem + dst + tid * C::SLOT + 96) = ld32(meta);
+                *(uint32_t*)(smem + dst + tid * C::SLOT + 100) = ld32(meta + 4);
+            }
 #pragma unroll
             for (int k = 0; k < V2_WR * C::NP / V2_THREADS; ++k) {
                 const int idx = tid + k * V2_THREADS, r = idx / C::NP, p = idx - r * C::NP;
-                const uint8_t* a = row_ptr(blob, fb, r) + u * C::RB;
+                const uint8_t* a = row_ptr(blob, fb, r) + C::raw_offset(u);
                 const uint32_t mis = (uint32_t) (uintptr_t) a & 15u;
                 if (p < (int) ((mis + C::RB + 15) >> 4)) cp16(smem + dst + r * C::SLOT + 16 * p, a - mis + 16 * p);
             }
@@ -746,8 +786,8 @@ v2_kernel(const Batch b, const NativeGeom geo, const Tables tb, const uint8_t* _
 #pragma unroll
                     for (int hh = 0; hh < 2; ++hh) {
                         pr[i][hh] = C::OFF_RAW + (u & 1) * C::RAWBUF + (32 * warp + 16 * i + 8 * hh + g) * C::SLOT +
-                                    ((lo4[i][hh] + u * C::RB) & 15u);
-                        if constexpr (GU) dd[i][hh] = half_at(lds16(smem, pr[i][hh])) * 0.25f;
+                                    ((lo4[i][hh] + C::raw_offset(u)) & 15u);
+                        if constexpr (GU && DT != T_IQ4_XS) dd[i][hh] = half_at(lds16(smem, pr[i][hh])) * 0.25f;
                     }
             }
             const int so = (c & 1) * V2_ACT;
@@ -762,7 +802,9 @@ v2_kernel(const Batch b, const NativeGeom geo, const Tables tb, const uint8_t* _
                     for (int hh = 0; hh < 2; ++hh) {
                         uint32_t lo, hi;
                         float d;
-                        if constexpr (GU) dec_iq3xxs(smem, pr[i][hh], 4 * (c & 1) + j, t, sgrid, dd[i][hh], lo, hi, d);
+                        if constexpr (GU && DT == T_IQ4_XS) dec_iq4xs(smem, pr[i][hh], 4 * (c & 1) + j, j, t, kv, lo, hi, d);
+                        else if constexpr (GU) dec_iq3xxs(smem, pr[i][hh], 4 * (c & 1) + j, t, sgrid, dd[i][hh], lo, hi, d);
+                        else if constexpr (DT == T_Q5_0) dec_q5_0(smem, pr[i][hh] + 22 * j, t, lo, hi, d);
                         else dec_iq4nl(smem, pr[i][hh] + 18 * j, t, kv, lo, hi, d);
                         a[i][hh] = lo;
                         a[i][2 + hh] = hi;
@@ -886,18 +928,18 @@ template <int T, bool GU, int WW, int TU = T> bool setup_ww(int& occ) {
 template <int T, bool GU, int TU = T> bool setup_one(int& occ) {
     return setup_ww<T, GU, 4, TU>(occ) && setup_ww<T, GU, 2, TU>(occ);
 }
-template <bool GU> bool setup_v2(int& occ) {
+template <bool GU, int DT = T_IQ4_NL> bool setup_v2(int& occ) {
     cudaFuncAttributes fa{};
-    if (cudaFuncGetAttributes(&fa, v2_kernel<GU>) != cudaSuccess || fa.ptxVersion < 80) return false;
-    if (cudaFuncSetAttribute(v2_kernel<GU>, cudaFuncAttributeMaxDynamicSharedMemorySize, V2<GU>::SMEM) != cudaSuccess)
+    if (cudaFuncGetAttributes(&fa, v2_kernel<GU, DT>) != cudaSuccess || fa.ptxVersion < 80) return false;
+    if (cudaFuncSetAttribute(v2_kernel<GU, DT>, cudaFuncAttributeMaxDynamicSharedMemorySize, V2<GU, DT>::SMEM) != cudaSuccess)
         return false;
     int o = 0;
-    if (cudaOccupancyMaxActiveBlocksPerMultiprocessor(&o, v2_kernel<GU>, V2_THREADS, V2<GU>::SMEM) != cudaSuccess ||
+    if (cudaOccupancyMaxActiveBlocksPerMultiprocessor(&o, v2_kernel<GU, DT>, V2_THREADS, V2<GU, DT>::SMEM) != cudaSuccess ||
         o < 1)
         return false;
     occ = std::min(occ, o);
     basalt::log::info("basalt", "prompt experts, v2 %s kernel: %d registers, %zu bytes local, %d bytes shared",
-                 GU ? "gate/up" : "down", fa.numRegs, (size_t) fa.localSizeBytes, V2<GU>::SMEM);
+                 GU ? "gate/up" : "down", fa.numRegs, (size_t) fa.localSizeBytes, V2<GU, DT>::SMEM);
     return true;
 }
 
@@ -915,7 +957,8 @@ const DevInfo& dev_info() {
     int occ = 1 << 20;
     d.ok = setup_one<T_IQ2_XXS, true>(occ) && setup_one<T_IQ2_XS, true>(occ) && setup_one<T_IQ2_S, true>(occ) &&
            setup_one<T_IQ3_XXS, true>(occ) && setup_one<T_IQ3_S, true>(occ) && setup_one<T_IQ4_XS, true>(occ) &&
-           setup_one<T_Q2_0, false>(occ) && setup_one<T_IQ4_NL, false>(occ);
+           setup_one<T_Q2_0, false>(occ) && setup_one<T_IQ4_NL, false>(occ) &&
+           (!native_next_enabled() || setup_one<T_Q5_0, false>(occ));
     d.occ = d.ok ? occ : 1;
     int mocc = 1 << 20;
     d.mix_ok = d.ok;
@@ -929,6 +972,7 @@ const DevInfo& dev_info() {
 
 // the v2 kernels are used unless a test overrides it
 std::atomic<int> g_v2_override{-1};
+std::atomic<bool> g_native_next{false};
 bool v2_wanted() {
     const int o = g_v2_override.load();
     return o >= 0 ? o == 1 : true;
@@ -943,7 +987,8 @@ int v2_occ() {
     if (d.v2 < 0) {
         d.v2 = 0;
         int occ = 1 << 20;
-        if (setup_v2<true>(occ) && setup_v2<false>(occ)) {
+        if (setup_v2<true>(occ) && setup_v2<false>(occ) &&
+            (!native_next_enabled() || (setup_v2<true, T_IQ4_XS>(occ) && setup_v2<false, T_Q5_0>(occ)))) {
             d.v2 = 1;
             d.v2_occ = occ;
         } else {
@@ -963,7 +1008,7 @@ int* v2_counters(const void* scratch, int64_t n, int n_expert) {
 bool gu_covered(int t) {
     return t == T_IQ2_XXS || t == T_IQ2_XS || t == T_IQ2_S || t == T_IQ3_XXS || t == T_IQ3_S || t == T_IQ4_XS;
 }
-bool d_covered(int t) { return t == T_Q2_0 || t == T_IQ4_NL; }
+bool d_covered(int t) { return t == T_Q2_0 || t == T_IQ4_NL || t == T_Q5_0; }
 
 template <int T, bool GU, int TU = T>
 void launch(int ww, unsigned grid, const Batch& b, const NativeGeom& g, const Tables& tb, const void* act,
@@ -983,10 +1028,10 @@ bool mix_covered(int tg, int tu) {
     }
 }
 
-template <bool GU>
+template <bool GU, int DT = T_IQ4_NL>
 void launch_v2(unsigned grid, const Batch& b, const NativeGeom& g, const Tables& tb, const void* act,
                const int32_t* src, void* out, float* dm, int* ctr, cudaStream_t s) {
-    v2_kernel<GU><<<grid, V2_THREADS, V2<GU>::SMEM, s>>>(b, g, tb, (const uint8_t*) act, src, (uint8_t*) out, dm, ctr);
+    v2_kernel<GU, DT><<<grid, V2_THREADS, V2<GU, DT>::SMEM, s>>>(b, g, tb, (const uint8_t*) act, src, (uint8_t*) out, dm, ctr);
 }
 
 // The work item's shape for a layer of `n` routed rows over `n_expert` experts: 128 routed rows when an expert has
@@ -998,7 +1043,11 @@ int pick_ww(int64_t n, int n_expert) {
 
 }  // namespace
 
+void native_next_override(bool enabled) { g_native_next.store(enabled); }
+bool native_next_enabled() { return g_native_next.load(); }
+
 bool native_supported(int gu_type, int d_type, int up_type) {
+    if (d_type == T_Q5_0 && !native_next_enabled()) return false;
     if (up_type >= 0 && up_type != gu_type)
         return requested() && mix_covered(gu_type, up_type) && d_covered(d_type) && dev_info().mix_ok;
     return requested() && gu_covered(gu_type) && d_covered(d_type) && dev_info().ok;
@@ -1037,9 +1086,12 @@ void experts_native(const Batch& b, const NativeGeom& g_in, int n_expert, int64_
     const int64_t tiles = (n + kTileRows - 1) / kTileRows + (b.e1 - b.e0);
     const unsigned g_gu = (unsigned) std::min<int64_t>(tiles * (1280 / weight_rows(ww)), (int64_t) d.sms * (mix ? d.mix_occ : d.occ));
     const unsigned g_d = (unsigned) std::min<int64_t>(tiles * (2560 / weight_rows(ww)), (int64_t) d.sms * d.occ);
-    // v2: IQ3_XXS gate/up and IQ4_NL down, each on its own (H is the same either way)
-    const int occ2 = (g.gu_type == T_IQ3_XXS || g.d_type == T_IQ4_NL) ? v2_occ() : 0;
-    const bool v2_gu = occ2 > 0 && g.gu_type == T_IQ3_XXS && !mix, v2_d = occ2 > 0 && g.d_type == T_IQ4_NL;
+    // Each projection selects its v2 schedule independently.
+    const bool next = native_next_enabled();
+    const int occ2 = (g.gu_type == T_IQ3_XXS || g.d_type == T_IQ4_NL ||
+                     (next && (g.gu_type == T_IQ4_XS || g.d_type == T_Q5_0))) ? v2_occ() : 0;
+    const bool v2_gu = occ2 > 0 && (g.gu_type == T_IQ3_XXS || (g.gu_type == T_IQ4_XS && next)) && !mix;
+    const bool v2_d = occ2 > 0 && (g.d_type == T_IQ4_NL || g.d_type == T_Q5_0);
     int* ctr = nullptr;
     if (occ2 > 0) {
         ctr = v2_counters(scratch, n, n_expert);
@@ -1050,7 +1102,8 @@ void experts_native(const Batch& b, const NativeGeom& g_in, int n_expert, int64_
     }
     if (v2_gu) {
         const unsigned gr = (unsigned) std::min<int64_t>(tiles * V2<true>::NFB, (int64_t) d.sms * occ2);
-        launch_v2<true>(gr, b, g, tb, xa, src, ha, nullptr, ctr, s);
+        if (g.gu_type == T_IQ4_XS) launch_v2<true, T_IQ4_XS>(gr, b, g, tb, xa, src, ha, nullptr, ctr, s);
+        else launch_v2<true>(gr, b, g, tb, xa, src, ha, nullptr, ctr, s);
     } else if (mix) {
         switch (g.gu_type * 100 + g.up_type) {
 #define MIX_GO(TG, TU) case TG * 100 + TU: launch<TG, true, TU>(ww, g_gu, b, g, tb, xa, src, ha, nullptr, s); break;
@@ -1068,8 +1121,10 @@ void experts_native(const Batch& b, const NativeGeom& g_in, int n_expert, int64_
     }
     if (v2_d) {
         const unsigned gr = (unsigned) std::min<int64_t>(tiles * V2<false>::NFB, (int64_t) d.sms * occ2);
-        launch_v2<false>(gr, b, g, tb, ha, src, nullptr, dm, ctr + 1, s);
-    } else if (g.d_type == T_Q2_0) launch<T_Q2_0, false>(ww, g_d, b, g, tb, ha, src, nullptr, dm, s);
+        if (g.d_type == T_Q5_0) launch_v2<false, T_Q5_0>(gr, b, g, tb, ha, src, nullptr, dm, ctr + 1, s);
+        else launch_v2<false>(gr, b, g, tb, ha, src, nullptr, dm, ctr + 1, s);
+    } else if (g.d_type == T_Q5_0) launch<T_Q5_0, false>(ww, g_d, b, g, tb, ha, src, nullptr, dm, s);
+    else if (g.d_type == T_Q2_0) launch<T_Q2_0, false>(ww, g_d, b, g, tb, ha, src, nullptr, dm, s);
     else launch<T_IQ4_NL, false>(ww, g_d, b, g, tb, ha, src, nullptr, dm, s);
     ck(cudaGetLastError(), "experts_native");
 }

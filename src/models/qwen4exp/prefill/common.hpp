@@ -5,6 +5,7 @@
 #include "basalt/models/qwen4exp/geometry.hpp"
 #include "basalt/models/qwen4exp/geometry.hpp"
 #include "basalt/models/qwen4exp/prefill/gemm.hpp"
+#include "basalt/models/qwen4exp/prefill/moe_fused_iq.hpp"
 #include <algorithm>
 #include <chrono>
 #include <string>
@@ -42,10 +43,9 @@ constexpr int kPrefillRingDeep = 384;
 constexpr int64_t kDeepRingTokens = 16384;
 extern int g_ring_depth;
 bool fused_ring();
-// (a prompt peer's streamed share and the fused kernels' batches follow the ring's size: those keep 256)
 inline int ring_slots(size_t T) {
     if ((int64_t) T < stream_all_min()) return std::min(g_ring_depth, STAGE + 2 * ahead_slots(T));
-    const bool deep = (int64_t) T >= kDeepRingTokens && !fused_ring();
+    const bool deep = (int64_t) T >= kDeepRingTokens && (!fused_ring() || fused::native_next_enabled());
     return std::min(g_ring_depth, deep ? kPrefillRingDeep : kPrefillRing);
 }
 constexpr int DQ = 2;              // dequantized-expert ring (FP16 gate/up + down)
