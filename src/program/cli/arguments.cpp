@@ -89,6 +89,7 @@ std::optional<int> parse_options(int argc, char** argv, CommonOptions& o, const 
         else if (a == "--conversation-cache-dir") o.conversation_cache_dir = next("--conversation-cache-dir");
         else if (a == "--conversation-cache-mib" || a == "--conversation-cache-slots" ||
                  a == "--conversation-cache-min-free-mib" || a == "--conversation-cache-disk-mib" ||
+                 a == "--conversation-cache-disk-min-free-mib" ||
                  a == "--conversation-cache-min-tokens" || a == "--ram-reserve-mib") {
             const std::string value = next(a.c_str());
             int64_t number = 0;
@@ -102,6 +103,7 @@ std::optional<int> parse_options(int argc, char** argv, CommonOptions& o, const 
             if (a == "--conversation-cache-mib") o.conversation_cache_mib = number;
             else if (a == "--conversation-cache-min-free-mib") o.conversation_cache_min_free_mib = number;
             else if (a == "--conversation-cache-disk-mib") o.conversation_cache_disk_mib = number;
+            else if (a == "--conversation-cache-disk-min-free-mib") o.conversation_cache_disk_min_free_mib = number;
             else if (a == "--conversation-cache-min-tokens") o.conversation_cache_min_tokens = (int) number;
             else if (a == "--ram-reserve-mib") o.ram_reserve_mib = number;
             else o.conversation_cache_slots = (int) number;

@@ -151,6 +151,13 @@ public:
     static constexpr int64_t kDiskStaleTokens = 4096;   // a stored copy this close to the chain's end is kept
     static constexpr uint64_t kDiskQueueCap = 4ull << 30;   // images waiting for the writer, in RAM
     uint64_t disk_floor{};
+    /// The free RAM a disk-tier capture or read must leave: --conversation-cache-disk-min-free-mib when given, else
+    /// the parking floor and the disk floor.
+    uint64_t disk_capture_floor() const {
+        return o.conversation_cache_disk_min_free_mib >= 0
+                   ? (uint64_t) o.conversation_cache_disk_min_free_mib << 20
+                   : std::max<uint64_t>((uint64_t) o.conversation_cache_min_free_mib << 20, disk_floor);
+    }
     bool disk_has(const std::vector<int32_t>& ids, const std::vector<ImgKey>& imgs, const std::vector<ConvCheckpoint>& cks, bool cvec);
     int64_t pp_total{};
     int64_t pp_from{};

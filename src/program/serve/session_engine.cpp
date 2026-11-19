@@ -184,7 +184,7 @@ public:
                 basalt::core::SavedConversation s = conversations->take(conversations->size() - 1);
                 if (!disk_has(s.live.ids, s.live.imgs, s.checkpoints, s.cvec) && disk.put(std::move(s), kDiskQueueCap)) ++written;
             }
-        const uint64_t floor = std::max<uint64_t>((uint64_t) o.conversation_cache_min_free_mib << 20, disk_floor);
+        const uint64_t floor = disk_capture_floor();
         const auto spill = [&](const std::vector<int32_t>& ids, const std::vector<ImgKey>& imgs, const std::vector<ConvCheckpoint>& cks, bool cvec) {
             if (at_exit) disk.flush();   // one image in RAM at a time
             const int64_t positions = (int64_t) ids.size();
@@ -250,7 +250,9 @@ public:
         const bool ram_room = !to_disk && conversations->make_room(estimate, held);
         if (!to_disk && !ram_room && disk_wants) to_disk = true;
         if (to_disk ? disk.queued_bytes() + estimate > kDiskQueueCap : !ram_room) return true;
-        const uint64_t floor = std::max<uint64_t>((uint64_t) o.conversation_cache_min_free_mib << 20, disk.enabled() ? disk_floor : 0);
+        const uint64_t floor = to_disk ? disk_capture_floor()
+                                       : std::max<uint64_t>((uint64_t) o.conversation_cache_min_free_mib << 20,
+                                                             disk.enabled() ? disk_floor : 0);
         if (!capture_admit(estimate, floor)) {
             basalt::log::info("basalt serve", "conversation cache: %zu tokens not parked (physical RAM admission)", live.size());
             return true;

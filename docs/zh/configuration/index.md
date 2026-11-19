@@ -166,6 +166,7 @@ bin/basalt serve MODEL.basalt [--python PY] [options]
 | `conversation-cache-min-free-mib` | engine | MiB | 2560 | 停放时保留的物理 RAM。 |
 | `conversation-cache-min-tokens` | engine | token | 0 | 只停放 token 数不少于这个值的会话。 |
 | `conversation-cache-disk-mib` | engine | MiB | 0（关闭） | 停放会话的磁盘预算。[运行](../running.md#磁盘上的会话--conversation-cache-disk-mib) |
+| `conversation-cache-disk-min-free-mib` | engine | MiB | `conversation-cache-min-free-mib` | 向磁盘层写入会话或从磁盘层读回会话时保留的物理 RAM。[运行](../running.md#磁盘上的会话--conversation-cache-disk-mib) |
 | `conversation-cache-dir` | engine | 目录 | 模型缓存目录 | 磁盘层使用另一个目录。 |
 
 ## 视觉

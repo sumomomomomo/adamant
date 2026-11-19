@@ -171,13 +171,14 @@ bool QfnRuntime::park_current(size_t held, int64_t kept) {
     }
     const auto t0 = Clock::now();
     try {
-        const uint64_t floor = std::max<uint64_t>((uint64_t) o.conversation_cache_min_free_mib * 1024 * 1024,
-                                                  disk.enabled() ? disk_floor : 0);
+        const uint64_t floor = to_disk ? disk_capture_floor()
+                                       : std::max<uint64_t>((uint64_t) o.conversation_cache_min_free_mib * 1024 * 1024,
+                                                             disk.enabled() ? disk_floor : 0);
         const size_t retained = reuse.bytes() + stage_retained;
         const size_t additional = estimate > retained ? estimate - retained : 0;
         if (!capture_admit(additional, floor)) {
             basalt::log::info("basalt serve", "conversation cache: skip parking (physical RAM admission; need %zu MiB plus %lld MiB floor, or telemetry unavailable, or RAM below the guard)",
-                         additional >> 20, (long long) o.conversation_cache_min_free_mib);
+                         additional >> 20, (long long) (floor >> 20));
             return true;
         }
         basalt::core::SavedConversation image;
@@ -289,7 +290,7 @@ bool QfnRuntime::checkpoint_at(int64_t L, std::vector<ConvCheckpoint>* parts, bo
 size_t QfnRuntime::spill_to_disk(bool at_exit, size_t limit) {
     ckd_finish();   // a turn checkpoint's state may still be on its way to the host
     size_t written = 0;
-    const uint64_t floor = std::max<uint64_t>((uint64_t) o.conversation_cache_min_free_mib << 20, disk_floor);
+    const uint64_t floor = disk_capture_floor();
     if (at_exit)
         while (conversations->size() > 0) {
             basalt::core::SavedConversation s = conversations->take(conversations->size() - 1);

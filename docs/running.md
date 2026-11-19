@@ -54,6 +54,11 @@ RAM, a session, or at exit. Only the system prompt's and the last three turns' s
 they were made with, and checked by hash; a bad file is deleted. The folder is capped by the budget (least recently used first), and a
 write always leaves 4 GiB of the volume free. After a restart, a prompt that starts with a stored conversation reads it back.
 
+A capture holds the conversation's host buffers until its writer has finished, so writing one and reading one back both ask the RAM
+admission first: they are refused while the free RAM stays under `--conversation-cache-min-free-mib` (or under the RAM reserve's
+floor, whichever is higher) or while the guard sees the machine low. `--conversation-cache-disk-min-free-mib` sets that floor for
+the disk tier alone; `0` writes and reads back whatever the guard allows, with the 4 GiB write queue as the bound.
+
 ## Sleep: `--idle-sleep`
 
 After the given seconds without requests, the engine frees its VRAM (the driver moves the GPU state to host memory). The process and its

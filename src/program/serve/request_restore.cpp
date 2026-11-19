@@ -181,7 +181,7 @@ Flow Request::restore() {
     }
     if (from_disk) {
         const uint64_t need = runtime_.disk.load_bytes(on_disk);
-        const uint64_t floor = std::max<uint64_t>((uint64_t) runtime_.o.conversation_cache_min_free_mib << 20, runtime_.disk_floor);
+        const uint64_t floor = runtime_.disk_capture_floor();
         const auto t0 = Clock::now();
         basalt::core::SavedConversation image;
         std::string de;

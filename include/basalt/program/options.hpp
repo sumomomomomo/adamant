@@ -120,6 +120,9 @@ struct CommonOptions {
     /// read back when a prompt starts with it, after a restart too (conversation_store.hpp)
     std::string conversation_cache_dir;
     int64_t conversation_cache_disk_mib = 0;   ///< byte budget of the disk tier, least recently used first; above 0 turns it on
+    /// --serve: the free RAM a disk-tier capture or read must leave; -1 = --conversation-cache-min-free-mib and the
+    /// RAM guard's floor.  0 writes and reads back whatever the RAM guard allows, bounded by the write queue's cap.
+    int64_t conversation_cache_disk_min_free_mib = -1;
     /// --serve: a prompt read from token 0 is also checkpointed at its first turn boundary - the end of the system
     /// prompt, which every chat of the same client shares - when that is at least N tokens (0 = never)
     int64_t prompt_cache_root = 2048;
