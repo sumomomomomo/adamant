@@ -2,10 +2,20 @@
 
 [简体中文](../zh/precision/peer-prefill-cutoffs.md)
 
-Single-slot serving with `--prefill-native-next`, an additional computing expert
+Serving with `--prefill-native-next`, an additional computing expert
 peer, two expert tiers, comparable primary/first-peer cards and non-exclusive
 expert placement uses the measured cutoffs below. Other configurations retain
 their existing policy. These features remain experimental and off by default.
+
+The routed policy also applies with batch slots. The additional peer has its own
+prefill transport buffers; its device allocation is reserved before filling its
+expert tier. Before a prompt starts, outstanding adaptive workers finish. During
+an overlapped read, expert adaptation stays paused while decoding and prefill
+read the shared expert weights. Short reads retain the existing scheduling:
+up to 16,384 tokens run alone unless `--read-beside` is enabled.
+
+The fused first-peer helper (`--prefill-peer-large`) still requires single-slot
+serving. It is not needed for the tuned routed policy.
 
 | Actual chunk tokens | Previous policy | Tuned policy |
 |---|---|---|
@@ -25,6 +35,64 @@ No arithmetic kernels, model weights, PLE precision, KV formats or decode policy
 change. Mid-size prompts switch between existing MMQ and fused arithmetic, and
 buffer reservations can change expert placement. Numerical differences and
 changed greedy responses are possible.
+
+## Batch-slot serving validation
+
+A normal-allocation A/B/B/A development comparison used one slot in the previous
+build and two full-context slots with the additional peer enabled. Both used MTP
+window 8, int8 KV, 262,144 context per slot, Q8_0 PLE, 23 GiB resident RAM experts,
+and RTX 3090 Ti / RTX 3090 / RTX 3080 at 400 / 320 / 250 W. Expert adaptation
+was disabled. Each arm ran three requests per size; all requests had zero cached
+tokens. These are configuration comparisons: the slots and buffer reservations
+change expert placement, so they do not isolate kernel performance.
+
+The unaccelerated two-slot column is a separate three-request median with the
+same prompts, cache settings and power limits. It retains ordinary first-peer
+prefill but has no additional peer or tuned routed cutoffs.
+
+| Actual prompt tokens | One slot, accelerated | Two slots, unaccelerated | Two slots, accelerated |
+|---|---:|---:|---:|
+| 1,120 | 1,257 | 982 | 1,430 |
+| 2,208 | 1,450 | 1,428 | 1,558 |
+| 4,400 | 1,548 | 1,143 | 1,611 |
+| 6,576 | 1,630 | 1,667 | 1,653 |
+| 8,768 | 2,135 | 2,146 | 2,130 |
+
+All rates are tok/s.
+
+An overlapping 23,491-token read completed while another slot generated 2,048
+tokens. That decode ran at 211.6 tok/s; its largest observed streaming gap was
+0.294 s. The prompt's 256-token chunks exercised the additional peer while 258
+decode windows ran. A disconnected stream released its slot and a subsequent
+uncached request completed. These checks validate progress and cleanup, not
+universal latency bounds. Peer transport parity, all four prefill layout tests,
+the cutoff policy test and fused-peer parity passed.
+The overlap and disconnect checks also passed with normal expert adaptation
+enabled; two simultaneous requests were observed decoding in both slots.
+
+A separate single-pass `basalt-bench` comparison used 20 GiB resident RAM experts
+and normal allocation at the same power limits. Its 1,069 / 2,110 / 4,191-token
+prefills measured 1,248 / 1,542 / 1,649 tok/s with one slot and
+1,170 / 1,529 / 1,647 tok/s with two. The cold 6,272 / 8,353-token fixtures were
+slower: 1,615 / 2,104 versus 1,400 / 1,976 tok/s. The repeated serving results
+above do not establish a gain for every prompt or cold allocation.
+
+| Decode fixture | One slot, ms/window | Two slots, ms/window | One / two slots, passes/s |
+|---|---:|---:|---:|
+| conv | 20.898 | 21.158 | 47.851 / 47.264 |
+| struct | 34.094 | 34.464 | 29.331 / 29.016 |
+| prose | 19.829 | 19.838 | 50.431 / 50.410 |
+
+The full BF16 gate used 100 chunks, 25,500 scored positions, forced window T=3
+and 20 GiB resident RAM experts at the same power limits. Arithmetic kernels are
+unchanged, but slot storage and peer buffers change tier placement and can alter
+greedy output.
+
+| Metric | One slot | Two slots |
+|---|---:|---:|
+| PPL | 3.30806 | 3.30862 |
+| Mean BF16 KL divergence | 0.0965205 | 0.0966209 |
+| BF16 top-1 agreement | 89.7176% | 89.6510% |
 
 ## Development comparison
 

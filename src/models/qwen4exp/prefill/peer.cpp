@@ -123,6 +123,12 @@ uint64_t Prefill::peer_bytes(int64_t chunk, bool streamed_share) {
                 FusedPeer::device_bytes(std::min(chunk, cutoffs().large_capacity())) : 0);
 }
 
+uint64_t Prefill::extra_peer_bytes(int64_t chunk) {
+    if (!mmq_plan().any || chunk <= 0) return 0;
+    const int64_t tokens = std::min({chunk, cutoffs().extra_capacity(), cutoffs().routed_capacity(stream_all_min())});
+    return PeerShare::peer_bytes(share_dims(tokens, tokens, mmq_plan()));
+}
+
 void Prefill::set_extra_peers(const std::vector<core::PeerExperts*>& peers, bool compute) {
     Impl& m = *impl_;
     m.extra_pp.clear();

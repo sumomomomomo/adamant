@@ -113,7 +113,7 @@ int run_engine(Options& o, std::vector<program::GpuCard>& chosen_cards) {
     auto set_stream_all_min = [&]() {
         basalt::prefill::cutoffs() = !o.diag_prefill_cutoffs.empty() ? diagnostic_cutoffs :
             basalt::prefill::serving_cutoffs(
-                o.serve && o.batch == 0 && o.layer_split.empty() && o.prefill_native_next,
+                o.serve && o.layer_split.empty() && o.prefill_native_next,
                 o.prefill_peer_extra == 1, (int) o.peer_devices.size(), peer_streamed_share, o.peer_exclusive);
         if (o.diag_prefill_long) {
             basalt::prefill::Prefill::set_stream_all_min(128);
@@ -135,8 +135,8 @@ int run_engine(Options& o, std::vector<program::GpuCard>& chosen_cards) {
     basalt::prefill::Prefill::set_large_peer(o.prefill_peer_large);
     if (o.prefill_peer_extra < 0 || o.prefill_peer_extra > 2)
         return fatal_start_error("--prefill-peer-extra needs 0, 1 or 2");
-    if (o.prefill_peer_extra && (!o.serve || o.batch > 0 || !o.layer_split.empty() || o.no_peer_prefill || o.peer_devices.size() < 2))
-        return fatal_start_error("--prefill-peer-extra requires single-slot serving with multiple expert peers");
+    if (o.prefill_peer_extra && (!o.serve || !o.layer_split.empty() || o.no_peer_prefill || o.peer_devices.size() < 2))
+        return fatal_start_error("--prefill-peer-extra requires serving with multiple expert peers and peer prefill");
     if (o.serve && o.conversation_cache_disk_mib > 0 && o.conversation_cache_dir.empty()) {
         basalt::log::error("basalt", "--conversation-cache-disk-mib needs --conversation-cache-dir");
         return 2;

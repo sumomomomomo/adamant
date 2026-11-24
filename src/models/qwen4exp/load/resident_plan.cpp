@@ -112,7 +112,9 @@ int resident_plan(Context& context) {
                 cudaMemGetInfo(&fb, &tb);
             }
             const uint64_t reserve = ((uint64_t) std::max(o.peer_reserve_mib, 128) << 20) +
-                                     (dev == o.peer_device ? (uint64_t) peer_split_bytes(d0) + peer_prompt_bytes() : 0);
+                                     (dev == o.peer_device ? (uint64_t) peer_split_bytes(d0) + peer_prompt_bytes() :
+                                      o.serve && o.prefill_peer_extra && !o.no_peer_prefill ?
+                                          basalt::prefill::Prefill::extra_peer_bytes(o.prefill_chunk) : 0);
             const uint64_t share = (uint64_t) std::count(o.peer_devices.begin(), o.peer_devices.end(), dev);
             rooms[i].bytes = fb > reserve ? ((uint64_t) fb - reserve) / share : 0;
             // Diagnostic comparisons keep tier placement stable across CUDA context variations.

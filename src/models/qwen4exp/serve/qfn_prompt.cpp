@@ -10,6 +10,7 @@ bool QfnRequest::prompt_begin() {
     batch_fatal = false;
     il_parts = 0;   // the slots' windows run between this prompt's chunks
     il_ms = 0;
+    if (runtime_.ba_job) { runtime_.ba_thr.join(); runtime_.ba_job = false; }
     runtime_.apply_pending(true);
     return runtime_.xq_drain();
 }
