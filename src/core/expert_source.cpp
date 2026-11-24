@@ -800,6 +800,7 @@ bool FileExpertSource::pin_cache_complement(
     const int64_t n_slots = cache.slots();
     std::vector<std::pair<int32_t, int32_t>> primary_gpu_pairs;
     std::vector<int32_t> pair_slot;
+    std::vector<size_t> slot_expert((size_t) std::max<int64_t>(n_slots, 0), kNoComplement);
     std::vector<uint64_t> slot_bytes((size_t) std::max<int64_t>(n_slots, 0), 0);
     std::vector<uint8_t> on_gpu((size_t) n_layers_ * (size_t) n_expert_, 0);   // held by the cache (counted when filled)
     uint64_t gpu_bytes = 0;
@@ -813,18 +814,41 @@ bool FileExpertSource::pin_cache_complement(
             on_gpu[(size_t) layer * (size_t) n_expert_ + (size_t) expert] = 1;
             gpu_bytes += layer_blob_bytes_[(size_t) layer];
             pair_slot.push_back(slot);
-            if (slot >= 0 && slot < n_slots) slot_bytes[(size_t) slot] = layer_blob_bytes_[(size_t) layer];
+            if (slot >= 0 && slot < n_slots) {
+                slot_bytes[(size_t) slot] = layer_blob_bytes_[(size_t) layer];
+                slot_expert[(size_t) slot] = (size_t) layer * (size_t) n_expert_ + (size_t) expert;
+            }
         }
     }
     std::vector<uint64_t> offsets;
     uint64_t bytes = 0;
     if (!detail::make_cache_complement_plan(n_layers_, n_expert_, layer_blob_bytes_, primary_gpu_pairs,
                                             additional_gpu_pairs, offsets, bytes, err)) return false;
+    // The free places after the experts (see set_spares).  A swap takes a place of its layer's blob size and gives one
+    // of the same size back, so each size keeps its own share of the n places: its layers' share, at least 8.
+    std::vector<std::pair<uint64_t, int64_t>> spare_sizes;   // (blob bytes, places)
+    uint64_t spare_bytes = 0;
+    if (spares_want_ > 0 && n_layers_ > 0) {
+        for (const uint64_t b : layer_blob_bytes_) {
+            if (b == 0) continue;
+            auto it = std::find_if(spare_sizes.begin(), spare_sizes.end(), [&](const auto& x) { return x.first == b; });
+            if (it == spare_sizes.end()) spare_sizes.emplace_back(b, 1);
+            else ++it->second;
+        }
+        for (auto& [b, n] : spare_sizes) {
+            n = std::max<int64_t>(8, (spares_want_ * n + n_layers_ - 1) / n_layers_);
+            spare_bytes += (uint64_t) n * b;
+        }
+    }
+
+    const bool budgeted = budget_bytes > 0;
+    const bool budget_lend = budgeted && lend_from_slot >= 0 && lend_from_slot < n_slots;
+    int64_t keep_from = n_slots;
     const bool what_fits = budget_bytes == kResidentWhatFits;   // the soft mode's second try
     uint64_t budget_physical = 0;   // the RAM reading a budget was sized from (0: no budget)
     if (budget_bytes > 0) {
-        // CS-T: a RAM budget.  The complement's experts in `rank` order (the expert profile, hottest first) while
-        // they fit, the rest left on the mapped files; clamped to what the RAM has room for.
+        // Budgeted lending funds the tail and spare places before ranked experts. A tail stops at the first
+        // slot whose complete blob does not fit.
         uint64_t physical = 0;
         if (!available_memory_bytes(physical)) {
             err = "FileExpertSource: cannot determine available RAM for --resident-budget-gib";
@@ -848,18 +872,29 @@ bool FileExpertSource::pin_cache_complement(
         std::vector<uint64_t> ranked(offsets.size(), kNoComplement);
         uint64_t at = 0;
         int64_t held = 0;
+        const uint64_t expert_budget = budget_bytes - (budget_lend && spare_bytes <= budget_bytes ? spare_bytes : 0);
+        if (lend_from_slot >= 0 && lend_from_slot < n_slots) {
+            for (int64_t slot = n_slots; slot-- > lend_from_slot;) {
+                const size_t i = slot_expert[(size_t) slot];
+                const uint64_t b = slot_bytes[(size_t) slot];
+                if (i == kNoComplement || b == 0 || b > expert_budget - at) break;
+                ranked[i] = at;
+                at += b;
+                keep_from = slot;
+            }
+        }
         if (rank != nullptr)
             for (const auto& pr : *rank) {
                 if (pr.first < 0 || pr.second < 0 || pr.first >= n_layers_ || pr.second >= n_expert_) continue;
                 const size_t i = (size_t) pr.first * (size_t) n_expert_ + (size_t) pr.second;
                 if (offsets[i] == kNoComplement || ranked[i] != kNoComplement) continue;   // on a GPU, or twice
                 const uint64_t b = layer_blob_bytes_[(size_t) pr.first];
-                if (b > budget_bytes - at) continue;
+                if (b > expert_budget - at) continue;
                 ranked[i] = at;
                 at += b;
                 ++held;
             }
-        if (what_fits && held == 0) {   // nothing to keep - the caller's plain mmap fallback, not an empty copy
+        if (what_fits && at == 0) {   // nothing to keep - the caller's plain mmap fallback, not an empty copy
             err = "FileExpertSource: the RAM has no room for any expert of the complement";
             return false;
         }
@@ -868,20 +903,20 @@ bool FileExpertSource::pin_cache_complement(
                      (double) budget_bytes / 1073741824.0, (long long) held, (double) bytes / 1073741824.0);
         offsets.swap(ranked);
         bytes = at;
-        lend_from_slot = -1;
     }
 
     const bool lend = lend_from_slot >= 0 && lend_from_slot < n_slots;
     uint64_t budget = std::numeric_limits<uint64_t>::max();
     if (bytes > 0 || lend) {
         // with a budget, the reading it was sized from - a second reading a few MB lower (the engine's own allocations,
-        // the file cache) could fail a budget the first one had clamped.  (A budget turns `lend` off.)
+        // the file cache) could fail a budget the first one had clamped.
         uint64_t physical = budget_physical;
         if (physical == 0 && !available_memory_bytes(physical)) {
             err = "FileExpertSource: cannot determine available RAM for the resident-memory safety check";
             return false;
         }
         budget = ram_tier_room(physical, headroom_bytes, pin);
+        if (budget_lend) budget = std::min(budget, budget_bytes);
         if (bytes > budget) {
             char message[320];
             std::snprintf(message, sizeof message,
@@ -893,28 +928,10 @@ bool FileExpertSource::pin_cache_complement(
             return false;
         }
     }
-    // The free places after the experts (see set_spares).  A swap takes a place of its layer's blob size and gives one
-    // of the same size back, so each size keeps its own share of the n places: its layers' share, at least 8.
-    std::vector<std::pair<uint64_t, int64_t>> spare_sizes;   // (blob bytes, places)
-    uint64_t spare_bytes = 0;
-    if (spares_want_ > 0 && n_layers_ > 0) {
-        for (const uint64_t b : layer_blob_bytes_) {
-            if (b == 0) continue;
-            auto it = std::find_if(spare_sizes.begin(), spare_sizes.end(), [&](const auto& x) { return x.first == b; });
-            if (it == spare_sizes.end()) spare_sizes.emplace_back(b, 1);
-            else ++it->second;
-        }
-        for (auto& [b, n] : spare_sizes) {
-            n = std::max<int64_t>(8, (spares_want_ * n + n_layers_ - 1) / n_layers_);
-            spare_bytes += (uint64_t) n * b;
-        }
-    }
-
     // The prompt path's lend region: its slots' experts are streamed from here during a prompt and copied back into
     // their slots after it, so the ones that fit next to the free places are kept here too (from the last slot down:
     // a short prompt lends only the last few).  The rest keep the mapped-file fallback.
-    int64_t keep_from = n_slots;
-    if (lend) {
+    if (lend && !budgeted) {
         bool spares_fit = false;
         keep_from = detail::choose_resident_room(slot_bytes, bytes, budget, lend_from_slot, spare_bytes, spares_fit);
         if (keep_from < 0) keep_from = n_slots;

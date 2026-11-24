@@ -188,3 +188,5 @@ All 25,500 rows matched the previously validated ordinary routed-prefill
 reference exactly. The fixed-reservation diagnostic used a different peer
 placement during its quality run, so its row values are not interchangeable
 with this serving measurement.
+
+Budgeted overlapping prefill uses [RAM-backed cache loans](budgeted-prefill.md).

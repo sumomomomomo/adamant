@@ -3,6 +3,14 @@
 #include "qfn_state.hpp"
 
 namespace basalt::models::qwen4exp::serve {
+namespace {
+template <class Swap>
+bool keeps_lend_backing(const basalt::core::FileExpertSource& src, const basalt::core::ExpertCache& cache,
+                        const std::vector<int32_t>& slots, int64_t experts, const Swap& s) {
+    const int32_t slot = slots[(size_t) s.lout * experts + s.out];
+    return slot < cache.full_slots() - src.resident_lent_slots() || src.has_resident(s.layer, s.in);
+}
+}  // namespace
 
 // Seeds the adaptive tier's usage counts from the routing of the prompt just read, so the first adaptation rounds
 // of a request already move the experts the new topic uses toward the GPUs.  The earlier usage decays to kSeedKeep and
@@ -251,6 +259,10 @@ bool QfnRuntime::adapt() {
     if (!pending.empty()) return true;   // the previous swaps are still in flight
     std::vector<Swap> swaps;
     rank_swaps(swaps, false);
+    if (!multi_gpu)
+        swaps.erase(std::remove_if(swaps.begin(), swaps.end(), [&](const Swap& s) {
+            return !keeps_lend_backing(src, xcache, host_res, g.n_expert, s);
+        }), swaps.end());
     if ((int) swaps.size() > o.adapt_swaps) swaps.resize((size_t) o.adapt_swaps);
     std::vector<int> staged_on;   // the devices whose adapt streams hold copies back (-1: CUDA0)
     const auto copy_back = [&](int32_t layer, int32_t slot, uint8_t* dst) -> bool {
@@ -368,6 +380,7 @@ bool QfnRuntime::xq_round(std::vector<Swap>* ranked) {
         }
         const int32_t slot = host_res[(size_t) s.lout * g.n_expert + s.out];
         if (slot < 0) return true;
+        if (!multi_gpu && !keeps_lend_backing(src, xcache, host_res, g.n_expert, s)) return true;
         const bool xchg = src.complement_ready() && (p2p || src.has_resident(s.layer, s.in)) &&
                           !src.has_resident(s.lout, s.out);
         uint64_t off = 0;

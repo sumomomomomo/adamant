@@ -135,6 +135,7 @@ bool QfnRequest::lend(int64_t tokens, std::string& e, int64_t chunk, int64_t hea
     // `auto:N` and a fixed N keep the operator's number.  (Chunking changes the GEMM tiles and so the rounding of
     // a prompt's K/V; the answers can differ from another chunking by greedy near-ties.)
     int64_t cap = runtime_.read_cap();
+    if (beside) cap = std::min(cap, std::max<int64_t>(256, runtime_.o.read_live_chunk));
     // Loan limit while slots decode: the loan takes only slots whose expert has a RAM copy (a lent slot
     // is refilled from RAM, never read from the file, before the slots decode again); without RAM copies a
     // read beside them stays within kLendCapDecoding slots.  A read on an idle engine may refill lent slots
@@ -148,6 +149,15 @@ bool QfnRequest::lend(int64_t tokens, std::string& e, int64_t chunk, int64_t hea
                                                 (runtime_.xcache.full_slots() - runtime_.xcache.slots()));
         else if (beside)
             loan_lim = runtime_.kLendCapDecoding;
+        // Check current ownership after adaptation; stale backing counts must never authorize a file-backed loan.
+        if (runtime_.src.complement_ready() && loan_lim > 0) {
+            const int64_t first = runtime_.xcache.slots() - loan_lim;
+            for (size_t i = 0; i < runtime_.host_res.size(); ++i) {
+                const int32_t slot = runtime_.host_res[i];
+                if (slot >= first && !runtime_.src.has_resident(i / runtime_.g.n_expert, i % runtime_.g.n_expert))
+                    loan_lim = std::min(loan_lim, runtime_.xcache.slots() - slot - 1);
+            }
+        }
     }
     if (loan_lim != std::numeric_limits<int64_t>::max() && !runtime_.pf_parts.empty() && runtime_.pf_parts[0].first >= 0) {
         const int64_t lc = std::max<int64_t>(256, engine_local::biggest_chunk(cap, [&](int64_t t) {
