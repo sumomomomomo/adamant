@@ -8,9 +8,10 @@ copies so they can be restored without file reads while another slot decodes.
 
 ## Selection and capacity
 
-The model sizes backing for a 1,024-token prompt chunk plus the slots' estimated
-KV growth through one configured prefill chunk. This region is bounded by the
-normal prompt lending region. The budgeted loader funds adaptive spare places
+The model sizes backing for the configured live prompt chunk plus every slot's
+maximum elastic KV growth. It can extend past the normal prompt lending region,
+since KV takes space from the same cache tail. See
+[long-context prefill](long-context-prefill.md) for the capacity and scheduling checks. The budgeted loader funds adaptive spare places
 and the backed tail first, then spends the remaining budget on ranked experts.
 Copies and spare places together stay within the requested RAM budget.
 
@@ -28,7 +29,7 @@ This changes RAM selection, not weight formats or arithmetic kernels. Selection
 and chunking can change which CPU/GPU arithmetic runs and can alter greedy output.
 It does not remove long-context admission or workspace-setup stalls.
 
-## Development validation
+## Initial bounded-backing validation
 
 Normal-allocation serving runs used RTX 3090 Ti / RTX 3090 / RTX 3080 at enforced
 400 / 320 / 250 W, int8 KV, MTP window 8, Q8_0 PLE, two 262,144-token slots,

@@ -95,14 +95,13 @@ int resident_load(Context& context) {
         const auto& rank = stages.empty() ? profile : profile_all;
         int64_t copy_lend_from = o.resident_budget > 0 ? -1 : lend_from;
         if (o.resident_budget > 0 && o.batch > 0 && stages.empty() && lend_from >= 0) {
-            const int64_t chunk = std::min<int64_t>(1024, o.prefill_chunk);
+            const int64_t chunk = std::min(o.prefill_chunk, std::max<int64_t>(256, o.read_live_chunk));
             uint64_t need = basalt::prefill::Prefill::bytes_needed(g, ss, chunk);
-            // Leave room for each slot's KV through one configured prompt chunk before loans must shrink.
-            const int64_t cells = std::min(o.max_context, o.prefill_chunk);
+            // KV growth consumes the same tail as prompt workspace; back each slot's full capacity.
             for (const auto& u : (*context.bslot_ss)[0])
-                need += basalt::core::session_kv_grow_bytes(*u, cells);
+                need += basalt::core::session_kv_grow_bytes(*u, u->max_cells);
             const int64_t slots = serve_loans::cache_slots_for(xcache, need);
-            copy_lend_from = std::max(lend_from, xcache.slots() - slots);
+            copy_lend_from = std::max<int64_t>(0, xcache.slots() - slots);
         }
         bool resident_ok = src.pin_cache_complement(xcache, err, o.resident_pin, gpu_only, copy_lend_from, resident_headroom,
                                                     o.resident_budget, &rank);
